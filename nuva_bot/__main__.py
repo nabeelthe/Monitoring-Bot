@@ -21,7 +21,7 @@ from .config import Config
 from .monitors import build_monitors
 from .scheduler import Scheduler
 from .state import State
-from .telegram import TelegramClient, Notifier
+from .telegram import TelegramClient, TelegramError, Notifier
 
 log = logging.getLogger("nuva")
 
@@ -111,7 +111,11 @@ async def run_bot(config: Config, state_path: str) -> int:
         scheduler = Scheduler(monitors, engine, notifier, state, session, config)
         commands = CommandBot(client, state, scheduler, config)
 
-        await commands.start()  # also validates the token via getMe
+        try:
+            await commands.start()  # also validates the token via getMe
+        except TelegramError as exc:
+            log.error("Telegram rejected the bot token: %s — check TELEGRAM_BOT_TOKEN.", exc)
+            return 2
         scheduler.start()
         log.info("bot running: %d monitors, %d chat(s) registered", len(monitors), len(state.chats))
 

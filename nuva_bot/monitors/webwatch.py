@@ -74,7 +74,13 @@ class WebWatchMonitor(Monitor):
         layer = page.get("layer", self.layer)
         priority = page.get("priority", ALWAYS if layer == "token" else KW)
 
-        status, body = await self.fetch(ctx, url, kind="text", timeout=30)
+        # listing trackers (CoinGecko/CMC) refuse obvious bot UAs; browse politely
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        status, body = await self.fetch(ctx, url, kind="text", timeout=30, headers=headers)
         ctx.state.kv_set(f"webwatch:errcount:{url}", 0)
         has_content = status < 400 and body is not None and len(normalize(body)) > 80
         state_key = f"webwatch:{url}"

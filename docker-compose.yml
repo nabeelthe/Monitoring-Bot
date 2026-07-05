@@ -5,7 +5,8 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./data:/app/data
+      # named volume: keeps the image's non-root ownership so state persists
+      - botdata:/app/data
       # uncomment to edit config without rebuilding:
       # - ./config.yaml:/app/config.yaml:ro
     logging:
@@ -13,3 +14,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  botdata:
