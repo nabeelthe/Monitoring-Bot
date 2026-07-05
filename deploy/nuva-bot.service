@@ -1,0 +1,24 @@
+# systemd unit for bare-VPS deployment
+#   sudo cp deploy/nuva-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nuva-bot
+[Unit]
+Description=Nuva Labs Telegram Monitoring Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nuvabot
+WorkingDirectory=/opt/monitoring-bot
+EnvironmentFile=/opt/monitoring-bot/.env
+ExecStart=/opt/monitoring-bot/.venv/bin/python -m nuva_bot
+Restart=always
+RestartSec=10
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/monitoring-bot/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,261 @@
+# ============================================================================
+# Nuva Labs — Monitoring Route Map (source of truth)
+# Every endpoint, address, handle, org, channel id and threshold lives here.
+# HASH = Provenance L1 token (live market proxy). NUVA = Nuva Finance token
+# (pre-TGE). The unrelated nuvalab.ai gaming startup is filtered out.
+# Secrets come from env vars: ${VAR} / ${VAR:-default}.
+# ============================================================================
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  # Optional: pre-register a chat id; otherwise the first chat to /start the
+  # bot becomes the owner. Extra chats can be whitelisted below.
+  chat_id: "${TELEGRAM_CHAT_ID:-}"
+  allowed_chat_ids: []
+
+# ---------------------------------------------------------------------------
+# Priority engine keywords
+# ---------------------------------------------------------------------------
+keywords:
+  # Auto-escalation: any hit turns an alert LOUD (notification on) 🚨
+  escalation:
+    - tge
+    - airdrop
+    - listing
+    - listed on
+    - mainnet
+    - genesis pass
+    - public sale
+    - series a
+    - exploit
+    - hack
+    - hacked
+    - depeg
+    - audit
+    - token generation event
+    - snapshot
+  # Relevance gate for keyword-gated (■) sources
+  relevance:
+    - nuva
+    - $nuva
+    - nuva labs
+    - nuva finance
+    - provenance blockchain
+    - provenance
+    - $hash
+    - figure markets
+    - nuheloc
+    - nuylds
+    - nvasset
+  # Unrelated-namesake filter (the nuvalab.ai gaming startup)
+  negative:
+    - nuvalab.ai
+    - game studio
+    - gaming studio
+    - game development
+    - gamefi studio
+
+# ---------------------------------------------------------------------------
+# ON-CHAIN · Provenance Blockchain (Cosmos SDK / Tendermint)
+# ---------------------------------------------------------------------------
+provenance:
+  explorer:                       # mint-per-mint feed — 2 min · ● Nuva denoms
+    enabled: true
+    cadence: 120
+    base_url: "https://service-explorer.provenance.io"
+    tx_link: "https://explorer.provenance.io/tx/{hash}"
+    page_size: 50
+    # tx message types worth alerting on (matched against displayMsgType)
+    msg_keywords: [marker, mint, burn, scope, metadata, vault]
+    # denoms/monikers that make the alert ★ always-loud
+    priority_denoms: [nuva, nuheloc, nuylds, nvasset, heloc, ylds]
+  governance:                     # proposals + upgrades — 30 min · ★ always
+    enabled: true
+    cadence: 1800
+    lcd_url: "https://api.provenance.io"
+    proposal_link: "https://explorer.provenance.io/proposals/{id}"
+
+# ---------------------------------------------------------------------------
+# ON-CHAIN · Ethereum / EVM (NUVA marketplace + provlabs/nuva-evm-contracts)
+# ---------------------------------------------------------------------------
+ethereum:                         # mints & transfers — 3 min · ● on mint
+  enabled: true
+  cadence: 180
+  api_url: "https://api.etherscan.io/v2/api"
+  chain_id: 1
+  api_key: "${ETHERSCAN_API_KEY:-}"
+  tx_link: "https://etherscan.io/tx/{hash}"
+  # NUVA ERC-20 token contract addresses (fill in once announced/known):
+  token_contracts: []
+  # vault-manager / marketplace contracts to watch for any tx:
+  watch_contracts: []
+  # ignore dust transfers below this token amount (mints/burns always alert)
+  min_token_amount: 0
+
+# ---------------------------------------------------------------------------
+# MARKET
+# ---------------------------------------------------------------------------
+market:
+  coingecko:                      # HASH — 5 min · ● big moves
+    enabled: true
+    cadence: 300
+    base_url: "https://api.coingecko.com/api/v3"
+    api_key: "${COINGECKO_API_KEY:-}"
+    coin_id: "hash-2"
+    price_move_pct: 8             # alert when |24h change| crosses each 8% band
+    volume_spike_multiplier: 3    # alert when 24h vol ≥ 3× rolling median
+    daily_summary_hour_utc: 14
+  defillama:                      # RWA TVL — 30 min · ● large swings
+    enabled: true
+    cadence: 1800
+    base_url: "https://api.llama.fi"
+    chain: "Provenance"
+    protocol_slug: ""             # optional Nuva protocol slug once listed
+    swing_pct: 10
+  osmosis:                        # HASH/OSMO pool — 10 min · off until pool id set
+    enabled: true
+    cadence: 600
+    lcd_url: "https://lcd.osmosis.zone"
+    pool_id: ""                   # set your Mintscan IBC pool id to activate
+    swing_pct: 15
+
+# ---------------------------------------------------------------------------
+# TOKEN / TGE / AIRDROP · NUVA pre-launch (all ★ PRIORITY) + BLOG/DOCS pages
+# ---------------------------------------------------------------------------
+webwatch:
+  enabled: true
+  cadence: 600                    # 10 min
+  pages:
+    # Nuva pages — any headline/page change = announcement, TGE date, airdrop terms
+    - name: "Nuva Labs — news"
+      url: "https://www.nuvalabs.com/news"
+      mode: change
+      layer: token
+      priority: always
+    - name: "Nuva Labs — home"
+      url: "https://www.nuvalabs.com"
+      mode: change
+      layer: token
+      priority: always
+    - name: "Nuva Finance app"
+      url: "https://app.nuvalabs.com"
+      mode: change
+      layer: token
+      priority: always
+    # Listing trackers — page returns content ⇒ probable TGE / first market
+    - name: "CoinGecko NUVA listing"
+      url: "https://www.coingecko.com/en/coins/nuva"
+      mode: listing
+      layer: token
+    - name: "CoinMarketCap NUVA listing"
+      url: "https://coinmarketcap.com/currencies/nuva/"
+      mode: listing
+      layer: token
+    # Genesis Pass / NUVA Points pre-launch portal
+    - name: "Genesis Pass / NUVA Points portal"
+      url: "https://www.nuvalabs.com/genesis"
+      mode: change
+      layer: token
+      priority: always
+    # Blog / docs (15 min bucket rides the same 10-min loop) — kw-gated
+    - name: "Provenance blog"
+      url: "https://provenance.io/blog"
+      mode: change
+      layer: blog
+      priority: escalate
+    - name: "Nuva docs"
+      url: "https://docs.nuvalabs.com"
+      mode: change
+      layer: blog
+      priority: escalate
+    - name: "Provenance developer portal"
+      url: "https://developer.provenance.io"
+      mode: change
+      layer: blog
+      priority: escalate
+
+# ---------------------------------------------------------------------------
+# CODE / DEV — 20 min · ● Nuva/vault
+# ---------------------------------------------------------------------------
+github:
+  enabled: true
+  cadence: 1200
+  token: "${GITHUB_TOKEN:-}"      # optional, raises rate limits
+  orgs: [provlabs, provenance-io]
+  release_repos:
+    - provlabs/vault
+    - provlabs/nuva-evm-contracts
+    - provenance-io/provenance
+  commit_repos:
+    - provlabs/vault
+    - provlabs/nuva-evm-contracts
+  # a commit is "notable" when its message hits one of these
+  commit_keywords: [release, upgrade, mainnet, audit, mint, vault, tge, airdrop, deploy, v1., v2.]
+
+# ---------------------------------------------------------------------------
+# BLOG / DOCS RSS (direct feeds where they exist) — 15 min · ■ kw-based
+# ---------------------------------------------------------------------------
+blogdocs:
+  enabled: true
+  cadence: 900
+  feeds:
+    - name: "Provenance blog RSS"
+      url: "https://provenance.io/blog/rss.xml"
+
+# ---------------------------------------------------------------------------
+# SOCIAL
+# ---------------------------------------------------------------------------
+social:
+  x:                              # 5 min · ● kw priority
+    enabled: true
+    cadence: 300
+    # Nitter mirrors are flaky; list several — the bot fails over automatically.
+    nitter_instances:
+      - "https://nitter.net"
+      - "https://nitter.poast.org"
+      - "https://nitter.privacyredirect.com"
+    official_priority: always     # all official posts delivered loud
+    official_handles: [NUVALabs, NUVAFinance, provenancefdn, provenanceio, Figure]
+    ecosystem_handles: [animocabrands, ysiu, mcagney]   # gated to relevant
+    searches: ["$NUVA"]
+  reddit:                         # 30 min · ● kw priority
+    enabled: true
+    cadence: 1800
+    feeds:
+      - name: "Nuva/Provenance search"
+        url: "https://www.reddit.com/search.rss?q=%22nuva+labs%22+OR+%22nuva+finance%22+OR+%22provenance+blockchain%22&sort=new"
+  youtube:                        # 60 min · ■ kw-based
+    enabled: true
+    cadence: 3600
+    channels:
+      # Fill channel_id (UC…) values; feeds activate as soon as they're set.
+      - name: "Provenance Blockchain"
+        channel_id: ""
+      - name: "Animoca Capital Rails"
+        channel_id: ""
+  discord:                        # 10 min · optional, needs bot token in the server
+    enabled: false
+    cadence: 600
+    bot_token: "${DISCORD_BOT_TOKEN:-}"
+    channel_ids: []               # Provenance Foundation announcement channel ids
+
+# ---------------------------------------------------------------------------
+# NEWS — 15 min · ● kw priority (gaming namesake excluded via negative kws)
+# ---------------------------------------------------------------------------
+news:
+  enabled: true
+  cadence: 900
+  google_news_queries:
+    - '"Nuva Labs" OR "Nuva Finance" OR "$NUVA" -game -gaming'
+    - '"Provenance Blockchain"'
+  feeds:
+    - name: CoinDesk
+      url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
+    - name: The Block
+      url: "https://www.theblock.co/rss.xml"
+    - name: Cointelegraph
+      url: "https://cointelegraph.com/rss"
+    - name: Decrypt
+      url: "https://decrypt.co/feed"
+    - name: The Defiant
+      url: "https://thedefiant.io/api/feed"
