@@ -108,8 +108,21 @@ async def run_bot(config: Config, state_path: str) -> int:
     async with aiohttp.ClientSession() as session:
         client = TelegramClient(token, session)
         notifier = Notifier(client, state)
-        scheduler = Scheduler(monitors, engine, notifier, state, session, config)
-        commands = CommandBot(client, state, scheduler, config)
+
+        pipeline = None
+        if config.getbool("intelligence.enabled", True):
+            from .intel.pipeline import IntelligencePipeline
+            pipeline = IntelligencePipeline(config, state, notifier)
+
+        scheduler = Scheduler(monitors, engine, notifier, state, session, config, pipeline=pipeline)
+        if pipeline is not None:
+            pipeline.monitor_statuses = scheduler.statuses
+        commands = CommandBot(client, state, scheduler, config, pipeline=pipeline)
+
+        dashboard = None
+        if pipeline is not None and config.getbool("dashboard.enabled", True):
+            from .dashboard import Dashboard
+            dashboard = Dashboard(config, pipeline, scheduler, state)
 
         try:
             await commands.start()  # also validates the token via getMe
@@ -117,12 +130,23 @@ async def run_bot(config: Config, state_path: str) -> int:
             log.error("Telegram rejected the bot token: %s — check TELEGRAM_BOT_TOKEN.", exc)
             return 2
         scheduler.start()
-        log.info("bot running: %d monitors, %d chat(s) registered", len(monitors), len(state.chats))
+        if pipeline is not None:
+            pipeline.start()
+        if dashboard is not None:
+            try:
+                await dashboard.start()
+            except OSError as exc:
+                log.warning("dashboard could not start (%s) — continuing without it", exc)
+                dashboard = None
+        log.info("platform running: %d monitors, intelligence=%s, %d chat(s)",
+                 len(monitors), "on" if pipeline else "off", len(state.chats))
 
         if state.chats:
             await notifier.broadcast(
-                f"🤖 <b>Nuva Labs Monitoring Bot v{__version__} online</b>\n"
-                f"{len(monitors)} monitors active. /status for details, /help for commands.",
+                f"🤖 <b>Nuva Intelligence Platform v{__version__} online</b>\n"
+                f"{len(monitors)} collectors · intelligence pipeline {'active' if pipeline else 'off'}"
+                + (f" · dashboard :{dashboard.port}" if dashboard else "")
+                + "\n/intelligence /risk /report — /help for everything.",
                 loud=False,
             )
 
@@ -137,6 +161,10 @@ async def run_bot(config: Config, state_path: str) -> int:
         log.info("shutting down…")
         await commands.stop()
         await scheduler.stop()
+        if dashboard is not None:
+            await dashboard.stop()
+        if pipeline is not None:
+            await pipeline.stop()
     return 0
 
 

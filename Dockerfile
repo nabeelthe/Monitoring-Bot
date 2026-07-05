@@ -16,6 +16,9 @@ ENV NUVA_STATE=/app/data/state.json \
 
 VOLUME ["/app/data"]
 
+# web dashboard + /healthz + Prometheus /metrics
+EXPOSE 8088
+
 # fails (non-zero) if config is broken → container marked unhealthy at start
 HEALTHCHECK --interval=5m --timeout=20s CMD python -m nuva_bot --check-config >/dev/null || exit 1
 

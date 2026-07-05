@@ -1,3 +1,8 @@
-"""Nuva Labs monitoring bot — watches Provenance/NUVA on-chain, market, token, dev, social and news sources."""
+"""Nuva Intelligence Platform — AI-analyst monitoring of the Nuva/Provenance ecosystem.
 
-__version__ = "1.0.0"
+Collectors (on-chain, market, token, dev, social, news) feed an intelligence
+pipeline: correlation into stories, confidence scoring, AI analysis, risk
+engine, predictions, executive reports, a live dashboard and a Telegram bot.
+"""
+
+__version__ = "2.0.0"

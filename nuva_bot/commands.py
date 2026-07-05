@@ -10,16 +10,24 @@ from .telegram import TelegramClient, TelegramError
 
 log = logging.getLogger("nuva.commands")
 
-HELP = """<b>Nuva Labs Monitoring Bot</b> — commands
+HELP = """<b>Nuva Intelligence Platform</b> — commands
 
-/status — health of every monitor
-/sources — what is being watched and how often
+<b>Intelligence</b>
+/intelligence — top signals + stories right now
+/risk — 7-dimension risk panel
+/predict — probability estimates with evidence
+/report <i>[morning|daily|weekly]</i> — executive brief
+/history <i>[hours]</i> — recent event memory
+/search <i>text</i> — query the full event history
+/digest — flush pending medium-priority digest now
+
+<b>Market & ops</b>
+/status — health of every collector
+/sources — the monitoring route map
 /price — HASH price right now
-/check <i>name</i> — poll one monitor immediately
-/mute <i>minutes</i> — silence notifications (alerts still arrive, without sound)
-/unmute — notifications back on
-/test — send a test alert
-/help — this message"""
+/check <i>name</i> — poll one collector immediately
+/mute <i>minutes</i> · /unmute — notification sound off/on
+/test — test alert · /help — this message"""
 
 
 def _fmt_ago(ts: float) -> str:
@@ -34,11 +42,12 @@ def _fmt_ago(ts: float) -> str:
 
 
 class CommandBot:
-    def __init__(self, client: TelegramClient, state, scheduler, config):
+    def __init__(self, client: TelegramClient, state, scheduler, config, pipeline=None):
         self.client = client
         self.state = state
         self.scheduler = scheduler
         self.config = config
+        self.pipeline = pipeline
         self.username = ""
         allowed = config.getlist("telegram.allowed_chat_ids")
         self.allowed_ids = {int(x) for x in allowed if str(x).strip().lstrip("-").isdigit()}
@@ -139,6 +148,20 @@ class CommandBot:
             await self._reply(chat_id, "🔊 Notifications back on.")
         elif cmd == "/check":
             await self._check(chat_id, arg)
+        elif cmd in ("/intelligence", "/intel"):
+            await self._intelligence(chat_id)
+        elif cmd == "/risk":
+            await self._risk(chat_id)
+        elif cmd == "/predict":
+            await self._predict(chat_id)
+        elif cmd == "/report":
+            await self._report(chat_id, arg or "daily")
+        elif cmd == "/history":
+            await self._history(chat_id, arg)
+        elif cmd == "/search":
+            await self._search(chat_id, arg)
+        elif cmd == "/digest":
+            await self._digest(chat_id)
         elif cmd == "/test":
             await self._reply(chat_id, "🧪 <b>Test alert</b> — delivery works. This is what monitoring alerts look like.")
         else:
@@ -199,6 +222,95 @@ class CommandBot:
             f"📈 <b>HASH</b>: ${q.get('current_price') or 0:,.6f} ({change:+.2f}% 24h)\n"
             f"Vol 24h: ${q.get('total_volume') or 0:,.0f} · MCap: ${q.get('market_cap') or 0:,.0f}",
         )
+
+    # ---- intelligence commands -------------------------------------------
+    def _need_pipeline(self) -> bool:
+        return self.pipeline is None
+
+    async def _intelligence(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        p = self.pipeline
+        events = [e for e in p.store.recent(24, limit=200) if e.priority != "ignore"]
+        events.sort(key=lambda e: (e.confidence, e.ts), reverse=True)
+        lines = ["🧠 <b>Intelligence — top signals (24h)</b>", ""]
+        if not events:
+            lines.append("No signals in the last 24h.")
+        for e in events[:8]:
+            t = time.strftime("%d %H:%M", time.gmtime(e.ts))
+            lines.append(f"• {t} [{e.layer}] <b>{html.escape(e.title[:100])}</b> — {e.confidence}% {e.priority}")
+        stories = {}
+        for e in events:
+            stories.setdefault(e.story_id, []).append(e)
+        multi = [(sid, evs) for sid, evs in stories.items() if len({x.layer for x in evs}) >= 2]
+        if multi:
+            lines.append("")
+            lines.append("<b>Active cross-layer stories</b>")
+            for sid, evs in sorted(multi, key=lambda kv: -len(kv[1]))[:3]:
+                layers = ", ".join(sorted({x.layer for x in evs}))
+                lines.append(f"📖 story <code>{sid}</code>: {len(evs)} events across {layers}")
+        await self._reply(chat_id, "\n".join(lines))
+
+    async def _risk(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        lines = ["🛡 <b>Risk panel</b>", ""]
+        for d in self.pipeline.risk.snapshot(self.scheduler.statuses):
+            arrow = {"rising": "↑", "falling": "↓", "flat": "→"}[d.trend]
+            icon = "🔴" if d.score >= 60 else ("🟡" if d.score >= 35 else "🟢")
+            lines.append(f"{icon} <b>{d.name}</b> {d.score}/100 {arrow}\n   {html.escape(d.detail)}\n   <i>{html.escape(d.recommendation)}</i>")
+        await self._reply(chat_id, "\n".join(lines))
+
+    async def _predict(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        lines = ["🔮 <b>Predictions</b> (heuristic, evidence-based)", ""]
+        for p in self.pipeline.predictor.all():
+            lines.append(f"<b>{p.probability}%</b> — {html.escape(p.name)}")
+            for ev in p.evidence:
+                lines.append(f"   · {html.escape(ev)}")
+        await self._reply(chat_id, "\n".join(lines))
+
+    async def _report(self, chat_id: int, kind: str):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        kind = kind.strip().lower()
+        if kind not in ("morning", "afternoon", "evening", "daily", "weekly"):
+            kind = "daily"
+        await self._reply(chat_id, self.pipeline.reports.brief(kind))
+
+    async def _history(self, chat_id: int, arg: str):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        try:
+            hours = float(arg) if arg else 24.0
+        except ValueError:
+            hours = 24.0
+        events = self.pipeline.store.recent(hours, limit=25)
+        lines = [f"🗄 <b>Event memory — last {hours:g}h</b> ({len(events)} shown)", ""]
+        for e in events:
+            t = time.strftime("%d %H:%M", time.gmtime(e.ts))
+            lines.append(f"• {t} [{e.layer}/{e.priority}] {html.escape(e.title[:100])}")
+        await self._reply(chat_id, "\n".join(lines) if events else "No events in that window.")
+
+    async def _search(self, chat_id: int, arg: str):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        if not arg:
+            return await self._reply(chat_id, "Usage: /search <i>text</i>")
+        events = self.pipeline.store.search(arg, limit=15)
+        lines = [f"🔎 <b>Search: {html.escape(arg)}</b> — {len(events)} hit(s)", ""]
+        for e in events:
+            t = time.strftime("%Y-%m-%d %H:%M", time.gmtime(e.ts))
+            lines.append(f"• {t} [{e.layer}] {html.escape(e.title[:100])}")
+        await self._reply(chat_id, "\n".join(lines))
+
+    async def _digest(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        pending = len(self.pipeline._digest)
+        await self.pipeline._flush_digest()
+        await self._reply(chat_id, f"🗂 Digest flushed ({pending} pending signal(s)).")
 
     async def _check(self, chat_id: int, arg: str):
         if not arg:

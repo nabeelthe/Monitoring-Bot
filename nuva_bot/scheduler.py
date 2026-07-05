@@ -25,11 +25,12 @@ class MonitorStatus:
 
 
 class Scheduler:
-    def __init__(self, monitors, engine: AlertEngine, notifier, state, session, config):
+    def __init__(self, monitors, engine: AlertEngine, notifier, state, session, config, pipeline=None):
         self.monitors = monitors
         self.engine = engine
         self.notifier = notifier
         self.state = state
+        self.pipeline = pipeline  # IntelligencePipeline; None = plain v1 alerting
         self.ctx = Context(session, state, config)
         self.statuses = {m.name: MonitorStatus(m) for m in monitors}
         self.started_at = time.time()
@@ -62,6 +63,14 @@ class Scheduler:
         for alert in alerts[:15]:  # hard cap per cycle to avoid alert storms
             verdict = self.engine.evaluate(alert)
             if not verdict.send:
+                continue
+            if self.pipeline is not None:
+                # intelligence path: baseline runs still feed historical memory
+                ev = await self.pipeline.process(
+                    alert, verdict.escalation_hits, record_only=not baselined)
+                if baselined and ev.priority in ("critical", "high"):
+                    sent += 1
+                    status.alerts_sent += 1
                 continue
             if not baselined:
                 continue  # first successful poll only records history

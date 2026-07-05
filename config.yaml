@@ -14,6 +14,57 @@ telegram:
   allowed_chat_ids: []
 
 # ---------------------------------------------------------------------------
+# Intelligence pipeline (scoring, correlation, AI analyst, memory)
+# ---------------------------------------------------------------------------
+intelligence:
+  enabled: true
+  db_path: "data/intel.db"        # historical event memory (SQLite)
+  story_window_hours: 6           # events sharing signal tags within this window = one story
+  # confidence base per source layer (0-100); route-map class + escalation
+  # keywords + cross-layer corroboration adjust from here
+  source_weights:
+    onchain: 90
+    ethereum: 88
+    market: 82
+    token: 80
+    dev: 76
+    blog: 65
+    news: 58
+    social: 45
+  ai:                             # AI analyst (Claude API); falls back to rule-based briefs
+    enabled: true
+    model: "claude-opus-4-8"
+    api_key: "${ANTHROPIC_API_KEY:-}"
+    max_analyses_per_hour: 12     # cost guard; only critical/high events are analyzed
+
+# ---------------------------------------------------------------------------
+# Smart alerting: critical/high immediate · medium digest · low reports-only
+# ---------------------------------------------------------------------------
+alerting:
+  digest_interval_seconds: 1800   # medium-priority signals batched every 30 min
+  quiet_hours_utc:                # high → digest during this window (critical always breaks through)
+    start: -1                     # e.g. 22; -1 disables
+    end: -1                       # e.g. 6
+
+# ---------------------------------------------------------------------------
+# Executive reports (hours in UTC; remove a line to disable that report)
+# ---------------------------------------------------------------------------
+reports:
+  schedule:
+    morning: 7
+    evening: 19
+    weekly_day: 0                 # Monday
+    weekly_hour: 8
+
+# ---------------------------------------------------------------------------
+# Web dashboard + observability (/healthz, Prometheus /metrics)
+# ---------------------------------------------------------------------------
+dashboard:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8088
+
+# ---------------------------------------------------------------------------
 # Priority engine keywords
 # ---------------------------------------------------------------------------
 keywords:

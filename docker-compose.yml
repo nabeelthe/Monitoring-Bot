@@ -4,6 +4,8 @@ services:
     container_name: nuva-monitoring-bot
     restart: unless-stopped
     env_file: .env
+    ports:
+      - "8088:8088"   # dashboard · /healthz · /metrics
     volumes:
       # named volume: keeps the image's non-root ownership so state persists
       - botdata:/app/data
