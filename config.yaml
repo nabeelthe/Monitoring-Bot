@@ -268,7 +268,7 @@ social:
     official_priority: always     # all official posts delivered loud
     official_handles: [NUVALabs, NUVAFinance, provenancefdn, provenanceio, Figure]
     ecosystem_handles: [animocabrands, ysiu, mcagney]   # gated to relevant
-    searches: ["$NUVA"]
+    searches: ["$NUVA", "$HASH provenance"]
   reddit:                         # 30 min · ● kw priority
     enabled: true
     cadence: 1800
@@ -299,6 +299,7 @@ news:
   google_news_queries:
     - '"Nuva Labs" OR "Nuva Finance" OR "$NUVA" -game -gaming'
     - '"Provenance Blockchain"'
+    - '"HASH token" OR "$HASH" provenance -game'
   feeds:
     - name: CoinDesk
       url: "https://www.coindesk.com/arc/outboundfeeds/rss/"
