@@ -1,24 +1,25 @@
-# systemd unit for bare-VPS deployment
+# systemd unit for bare-VPS deployment (no Docker).
+# Installed automatically by deploy/install.sh. Manual install:
 #   sudo cp deploy/nuva-bot.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now nuva-bot
 [Unit]
-Description=Nuva Labs Telegram Monitoring Bot
+Description=Nuva Intelligence Platform
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=nuvabot
-WorkingDirectory=/opt/monitoring-bot
-EnvironmentFile=/opt/monitoring-bot/.env
-ExecStart=/opt/monitoring-bot/.venv/bin/python -m nuva_bot
+WorkingDirectory=/opt/nuva
+EnvironmentFile=/opt/nuva/.env
+ExecStart=/opt/nuva/.venv/bin/python -m nuva_bot
 Restart=always
 RestartSec=10
 # hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/monitoring-bot/data
+ReadWritePaths=/opt/nuva/data
 
 [Install]
 WantedBy=multi-user.target
