@@ -12,10 +12,23 @@ BRANCH="claude/telegram-bot-token-monitoring-ca7hmq"
 APP_DIR="/opt/nuva"
 SVC_USER="nuvabot"
 
-echo "==> Installing system packages (python, venv, git)…"
+echo "==> Installing base packages (git, add-apt-repository)…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip git >/dev/null
+apt-get install -y -qq git software-properties-common >/dev/null
+
+echo "==> Checking system Python version (need 3.10+)…"
+SYS_PY_OK="$(python3 -c 'import sys; print(1 if sys.version_info >= (3,10) else 0)' 2>/dev/null || echo 0)"
+if [ "$SYS_PY_OK" = "1" ]; then
+  PYTHON_BIN="$(command -v python3)"
+  echo "    system python3 ($($PYTHON_BIN --version)) is new enough — using it"
+else
+  echo "    system python3 is older than 3.10 (Ubuntu 20.04 ships 3.8) — installing Python 3.11 via deadsnakes PPA"
+  add-apt-repository -y ppa:deadsnakes/ppa >/dev/null
+  apt-get update -qq
+  apt-get install -y -qq python3.11 python3.11-venv python3.11-distutils >/dev/null
+  PYTHON_BIN="$(command -v python3.11)"
+fi
 
 echo "==> Creating service user '${SVC_USER}'…"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "$SVC_USER"
@@ -28,8 +41,10 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi
 
-echo "==> Building the Python environment…"
-python3 -m venv "$APP_DIR/.venv"
+echo "==> Building the Python environment (using $PYTHON_BIN)…"
+# --clear: if a previous run built the venv with the wrong (system) interpreter,
+# wipe it so we don't end up with a mismatched/broken environment.
+"$PYTHON_BIN" -m venv --clear "$APP_DIR/.venv"
 # upgrade pip/setuptools/wheel first — fixes the sgmllib3k build quirk for feedparser
 "$APP_DIR/.venv/bin/pip" install -q --upgrade pip setuptools wheel
 "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
