@@ -44,6 +44,9 @@ echo "==> Creating service user '${SVC_USER}'…"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "$SVC_USER"
 
 echo "==> Fetching the platform into ${APP_DIR}…"
+# A prior run chowns the tree to the service user, so a re-run as root trips
+# git's "dubious ownership" guard — whitelist the path before touching it.
+git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
   git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
