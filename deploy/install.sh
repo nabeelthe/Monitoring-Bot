@@ -27,9 +27,16 @@ else
   echo "    system python3 ($(python3 --version 2>&1)) is older than 3.10 (Ubuntu 20.04 ships 3.8)."
   echo "    Installing a self-contained Python 3.11 via uv (https://astral.sh/uv) — no PPA,"
   echo "    no apt repository, no GPG keyserver dependency, works on any distro/version."
+  # Install the interpreter to a SHARED path (not root's home) so the unprivileged
+  # 'nuvabot' service user can execute it — a venv only symlinks to its base python,
+  # and /root is unreadable to other users (and blocked by the unit's ProtectHome).
+  UVPY_DIR=/opt/uv-python
+  mkdir -p "$UVPY_DIR"
+  export UV_PYTHON_INSTALL_DIR="$UVPY_DIR"
   curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
   /usr/local/bin/uv python install 3.11
   PYTHON_BIN="$(/usr/local/bin/uv python find 3.11)"
+  chmod -R a+rX "$UVPY_DIR"   # interpreter is world read/execute; no secrets live here
   echo "    using portable interpreter: $PYTHON_BIN"
 fi
 
