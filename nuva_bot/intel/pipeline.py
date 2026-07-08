@@ -50,6 +50,11 @@ class IntelligencePipeline:
         self.digest_interval = config.getint("alerting.digest_interval_seconds", 1800)
         self.quiet_start = config.getint("alerting.quiet_hours_utc.start", -1)
         self.quiet_end = config.getint("alerting.quiet_hours_utc.end", -1)
+        # noise reduction
+        self.per_source_hourly_cap = config.getint("alerting.per_source_hourly_cap", 8)
+        self._repost_window = config.getint("alerting.repost_window_seconds", 21600)  # 6h
+        self._recent_fingerprints: dict[str, float] = {}
+        self._budget: dict[str, list] = {}
         self._digest: list[Event] = []
         self._digest_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
@@ -95,9 +100,19 @@ class IntelligencePipeline:
         if record_only:
             return ev
 
+        # --- noise reduction: collapse reposts / copied announcements ---
+        if self._is_repost(ev):
+            self.counters["reposts"] = self.counters.get("reposts", 0) + 1
+            return ev  # already told the user this story; stay silent
+
         route = ev.priority
         if route == "high" and self.in_quiet_hours():
             route = "medium"  # digest it; critical still goes out at night
+
+        # --- per-source alert budget: no single source can flood ---
+        # critical always passes; high demotes to digest once a source is over budget
+        if route == "high" and not self._budget_ok(ev.monitor):
+            route = "medium"
 
         if route == "critical" or route == "high":
             await self._send_immediate(ev)
@@ -108,6 +123,42 @@ class IntelligencePipeline:
         else:
             self.counters["ignored"] += 1
         return ev
+
+    # ---- noise reduction helpers -----------------------------------------
+    @staticmethod
+    def _fingerprint(title: str) -> str:
+        import re
+        words = re.findall(r"[a-z0-9$]+", title.lower())
+        stop = {"the", "a", "an", "is", "to", "of", "on", "in", "for", "and", "new", "now"}
+        keep = sorted(w for w in words if w not in stop and len(w) > 2)
+        return " ".join(keep[:12])
+
+    def _is_repost(self, ev: Event) -> bool:
+        """Suppress near-duplicate content already alerted recently (copied
+        announcements, cross-posted news, retweets of the same story)."""
+        fp = self._fingerprint(ev.title)
+        if not fp:
+            return False
+        seen = self._recent_fingerprints
+        now = ev.ts
+        # drop expired entries
+        for k in [k for k, t in seen.items() if now - t > self._repost_window]:
+            del seen[k]
+        if fp in seen:
+            seen[fp] = now
+            return True
+        seen[fp] = now
+        return False
+
+    def _budget_ok(self, monitor: str) -> bool:
+        now = time.time()
+        stamps = [t for t in self._budget.get(monitor, []) if now - t < 3600]
+        if len(stamps) >= self.per_source_hourly_cap:
+            self._budget[monitor] = stamps
+            return False
+        stamps.append(now)
+        self._budget[monitor] = stamps
+        return True
 
     # ---- immediate intelligence alert -------------------------------------
     async def _send_immediate(self, ev: Event):
@@ -128,6 +179,10 @@ class IntelligencePipeline:
             f"{head}{PRIORITY_EMOJI.get(ev.priority, '')} <b>{prio} PRIORITY</b> · {emoji} {html.escape(ev.monitor)}",
             "",
             f"<b>{html.escape(brief.summary[:300])}</b>",
+        ]
+        if brief.plain_summary:
+            lines.append(f"🗣 <b>In plain terms:</b> {html.escape(brief.plain_summary[:350])}")
+        lines += [
             html.escape(brief.why_it_matters[:400]),
             "",
             f"Confidence: <b>{ev.confidence}%</b> · Assessment: <b>{brief.assessment}</b>"

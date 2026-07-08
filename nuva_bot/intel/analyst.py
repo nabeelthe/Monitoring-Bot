@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 
 from .events import Event
+from .plain import humanize
 
 log = logging.getLogger("nuva.analyst")
 
@@ -23,14 +24,15 @@ BRIEF_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string", "description": "One-sentence executive summary of what happened"},
-        "why_it_matters": {"type": "string", "description": "Why this matters for the Nuva/Provenance ecosystem, 1-2 sentences"},
+        "plain_summary": {"type": "string", "description": "Explain what happened in ONE sentence a complete crypto beginner would understand — no jargon, no ticker symbols without context. Assume the reader has never traded."},
+        "why_it_matters": {"type": "string", "description": "Why this matters for the Nuva/Provenance ecosystem, in simple terms, 1-2 sentences"},
         "assessment": {"type": "string", "enum": ["bullish", "bearish", "neutral", "suspicious", "informational"]},
-        "risk_note": {"type": "string", "description": "Risk assessment in one sentence, incl. manipulation probability if relevant"},
-        "suggested_action": {"type": "string", "description": "Concrete next action for the operator, one sentence"},
+        "risk_note": {"type": "string", "description": "Risk assessment in one plain sentence, incl. manipulation probability if relevant"},
+        "suggested_action": {"type": "string", "description": "Concrete next action for the operator, one plain sentence"},
         "monitor_next": {"type": "array", "items": {"type": "string"}, "description": "1-3 things to watch next"},
         "needs_human": {"type": "boolean", "description": "Should a human investigate now?"},
     },
-    "required": ["summary", "why_it_matters", "assessment", "risk_note",
+    "required": ["summary", "plain_summary", "why_it_matters", "assessment", "risk_note",
                  "suggested_action", "monitor_next", "needs_human"],
     "additionalProperties": False,
 }
@@ -39,9 +41,11 @@ SYSTEM_PROMPT = (
     "You are the AI analyst of a crypto intelligence platform monitoring the Nuva "
     "Labs / Nuva Finance / Provenance Blockchain ecosystem (HASH = Provenance L1 "
     "token, NUVA = pre-TGE Nuva Finance token). You receive one detected event "
-    "plus correlated signals and history. Write for a professional trading desk: "
-    "factual, specific, no hype, no filler. Flag anything that looks like "
-    "manipulation, a scam, or a fake announcement. If data is thin, say so."
+    "plus correlated signals and history. Be factual, specific, no hype, no filler. "
+    "CRITICAL: write so a complete beginner with no crypto knowledge can follow — "
+    "explain jargon in plain words, spell out why it matters in everyday terms. "
+    "Flag anything that looks like manipulation, a scam, or a fake announcement. "
+    "If data is thin, say so."
 )
 
 
@@ -52,6 +56,7 @@ class Brief:
     assessment: str
     risk_note: str
     suggested_action: str
+    plain_summary: str = ""   # one sentence a non-crypto person understands
     monitor_next: list = field(default_factory=list)
     needs_human: bool = False
     source: str = "rules"  # "ai" or "rules"
@@ -125,6 +130,7 @@ class Analyst:
         data = json.loads(text)
         return Brief(
             summary=data["summary"],
+            plain_summary=data.get("plain_summary") or humanize(ev.layer, ev.title, ev.body),
             why_it_matters=data["why_it_matters"],
             assessment=data["assessment"],
             risk_note=data["risk_note"],
@@ -174,6 +180,7 @@ class Analyst:
 
         return Brief(
             summary=ev.title,
+            plain_summary=humanize(ev.layer, ev.title, ev.body),
             why_it_matters=f"{ev.layer.capitalize()}-layer signal with {ev.confidence}% confidence. {drivers}{hist_note}",
             assessment=assessment,
             risk_note=("Unconfirmed single-source signal — manipulation/false-positive risk is elevated."

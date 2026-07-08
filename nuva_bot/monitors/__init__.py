@@ -13,6 +13,7 @@ def build_monitors(config) -> list:
     from .github_dev import GitHubOrgsMonitor
     from .feeds import build_feed_monitors
     from .discord_watch import DiscordMonitor
+    from .telegram_watch import TelegramChannelMonitor
 
     candidates = [
         ProvenanceExplorerMonitor(config),
@@ -25,6 +26,7 @@ def build_monitors(config) -> list:
         GitHubOrgsMonitor(config),
         *build_feed_monitors(config),
         DiscordMonitor(config),
+        TelegramChannelMonitor(config),
     ]
 
     monitors = []

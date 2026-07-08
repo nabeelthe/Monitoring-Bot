@@ -49,7 +49,7 @@ echo "==> Fetching the platform into ${APP_DIR}…"
 git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
-  git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+  git -C "$APP_DIR" reset --hard "origin/$BRANCH"
 else
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi

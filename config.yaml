@@ -42,6 +42,8 @@ intelligence:
 # ---------------------------------------------------------------------------
 alerting:
   digest_interval_seconds: 1800   # medium-priority signals batched every 30 min
+  per_source_hourly_cap: 8        # max instant high-priority alerts per source per hour (overflow → digest)
+  repost_window_seconds: 21600    # collapse copied/duplicate announcements seen within 6h
   quiet_hours_utc:                # high → digest during this window (critical always breaks through)
     start: -1                     # e.g. 22; -1 disables
     end: -1                       # e.g. 6
@@ -120,6 +122,10 @@ provenance:
     msg_keywords: [marker, mint, burn, scope, metadata, vault]
     # denoms/monikers that make the alert ★ always-loud
     priority_denoms: [nuva, nuheloc, nuylds, nvasset, heloc, ylds]
+    # a plain transfer must move at least this many HASH to alert individually;
+    # smaller matching activity is rolled into one hourly summary (no per-tx spam)
+    min_hash_amount: 25000
+    summary_interval: 3600
   governance:                     # proposals + upgrades — 30 min · ★ always
     enabled: true
     cadence: 1800
@@ -252,6 +258,12 @@ blogdocs:
   feeds:
     - name: "Provenance blog RSS"
       url: "https://provenance.io/blog/rss.xml"
+    - name: "Medium — Nuva Labs"
+      url: "https://medium.com/feed/@nuvalabs"
+    - name: "Medium — Provenance Blockchain"
+      url: "https://medium.com/feed/provenance-blockchain"
+    - name: "Medium tag — Provenance Blockchain"
+      url: "https://medium.com/feed/tag/provenance-blockchain"
 
 # ---------------------------------------------------------------------------
 # SOCIAL
@@ -265,6 +277,9 @@ social:
       - "https://nitter.net"
       - "https://nitter.poast.org"
       - "https://nitter.privacyredirect.com"
+      - "https://nitter.tiekoetter.com"
+      - "https://xcancel.com"
+      - "https://nitter.kavin.rocks"
     official_priority: always     # all official posts delivered loud
     official_handles: [NUVALabs, NUVAFinance, provenancefdn, provenanceio, Figure]
     ecosystem_handles: [animocabrands, ysiu, mcagney]   # gated to relevant
@@ -289,6 +304,12 @@ social:
     cadence: 600
     bot_token: "${DISCORD_BOT_TOKEN:-}"
     channel_ids: []               # Provenance Foundation announcement channel ids
+  telegram_channels:              # 10 min · public channels via t.me/s/ (no bot needed)
+    enabled: true
+    cadence: 600
+    channels:                     # add public channel usernames (without @)
+      - provenanceblockchain
+      - nuvalabs
 
 # ---------------------------------------------------------------------------
 # NEWS — 15 min · ● kw priority (gaming namesake excluded via negative kws)
