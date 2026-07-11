@@ -93,6 +93,8 @@ class CoinGeckoHashMonitor(Monitor):
             ))
 
         ctx.state.kv_set("cg:last_price", price)
+        ctx.state.kv_set("cg:last_volume", volume)
+        ctx.state.kv_set("cg:last_quote_ts", datetime.now(timezone.utc).timestamp())
         return alerts
 
 

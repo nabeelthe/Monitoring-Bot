@@ -16,6 +16,11 @@ HELP = """<b>Nuva Intelligence Platform</b> — commands
 Just type any question — “what happened today?”, “why did price move?”,
 “should I worry?” (in groups, use /ask <i>question</i>)
 
+<b>📟 Terminal</b>
+/terminal — everything on one screen (price, risk, signals, predictions)
+/chart <i>[hours]</i> — price + volume chart
+/watch <i>word</i> · /unwatch <i>word</i> — personal watchlist (matching events jump the queue)
+
 <b>Intelligence</b>
 /intelligence — top signals + stories right now
 /risk — 7-dimension risk panel
@@ -170,6 +175,14 @@ class CommandBot:
             await self._check(chat_id, arg)
         elif cmd == "/ask":
             await self._ask(chat_id, arg)
+        elif cmd == "/terminal":
+            await self._terminal(chat_id)
+        elif cmd == "/chart":
+            await self._chart(chat_id, arg)
+        elif cmd == "/watch":
+            await self._watch(chat_id, arg, add=True)
+        elif cmd in ("/unwatch", "/watchlist"):
+            await self._watch(chat_id, arg, add=(cmd == "/watch"))
         elif cmd in ("/intelligence", "/intel"):
             await self._intelligence(chat_id)
         elif cmd == "/risk":
@@ -248,6 +261,35 @@ class CommandBot:
     # ---- intelligence commands -------------------------------------------
     def _need_pipeline(self) -> bool:
         return self.pipeline is None
+
+    async def _terminal(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        from .intel.terminal import build_terminal
+        await self._reply(chat_id, build_terminal(self.pipeline, self.scheduler.statuses))
+
+    async def _chart(self, chat_id: int, arg: str):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        from .intel.terminal import build_chart_text
+        try:
+            hours = min(float(arg), 24 * 30) if arg else 24.0
+        except ValueError:
+            hours = 24.0
+        await self._reply(chat_id, build_chart_text(self.pipeline, hours))
+
+    async def _watch(self, chat_id: int, arg: str, *, add: bool):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        arg = arg.strip().lower()
+        if arg and add:
+            wl = self.pipeline.watch_add(arg)
+            return await self._reply(chat_id, f"⭐ Watching “{html.escape(arg)}”. Matching events will alert at high priority.\nWatchlist: {html.escape(', '.join(wl)) or '—'}")
+        if arg and not add:
+            wl = self.pipeline.watch_remove(arg)
+            return await self._reply(chat_id, f"Removed. Watchlist: {html.escape(', '.join(wl)) or '(empty)'}")
+        wl = self.pipeline.state.kv_get("watchlist", [])
+        await self._reply(chat_id, "⭐ Watchlist: " + (html.escape(", ".join(wl)) if wl else "(empty — add with /watch <i>word</i>)"))
 
     async def _ask(self, chat_id: int, question: str):
         if self.copilot is None:

@@ -58,6 +58,10 @@ class EventStore:
             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
             CREATE INDEX IF NOT EXISTS idx_events_story ON events(story_id);
             CREATE INDEX IF NOT EXISTS idx_events_layer ON events(layer, ts);
+            CREATE TABLE IF NOT EXISTS ticks(
+                ts REAL NOT NULL, price REAL, volume REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ticks_ts ON ticks(ts);
         """)
         self._db.commit()
 
@@ -171,3 +175,27 @@ class EventStore:
     def total(self) -> int:
         with self._lock:
             return self._db.execute("SELECT COUNT(*) n FROM events").fetchone()["n"]
+
+    # ---- market time series (price/volume ticks) --------------------------
+    def add_tick(self, price: float, volume: float, ts: float | None = None,
+                 min_gap: float = 240):
+        """Record a market tick; skips if the last tick is younger than min_gap
+        seconds so restarts/races can't double-write."""
+        ts = ts or time.time()
+        with self._lock:
+            row = self._db.execute("SELECT MAX(ts) m FROM ticks").fetchone()
+            if row["m"] is not None and ts - row["m"] < min_gap:
+                return
+            self._db.execute("INSERT INTO ticks VALUES (?,?,?)", (ts, price, volume))
+            # keep 90 days max
+            self._db.execute("DELETE FROM ticks WHERE ts < ?", (ts - 90 * 86400,))
+            self._db.commit()
+
+    def ticks(self, hours: float = 24, limit: int = 2500) -> list[tuple[float, float, float]]:
+        """Return [(ts, price, volume), ...] oldest-first for the window."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, price, volume FROM ticks WHERE ts >= ? ORDER BY ts ASC LIMIT ?",
+                (time.time() - hours * 3600, limit),
+            ).fetchall()
+        return [(r["ts"], r["price"], r["volume"]) for r in rows]

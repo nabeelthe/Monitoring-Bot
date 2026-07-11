@@ -68,6 +68,7 @@ class IntelligencePipeline:
         self._tasks.append(asyncio.create_task(self._report_loop(), name="reports"))
         if self.config.getbool("intelligence.radar.enabled", True):
             self._tasks.append(asyncio.create_task(self._radar_loop(), name="radar"))
+        self._tasks.append(asyncio.create_task(self._tick_loop(), name="ticks"))
 
     async def stop(self):
         for t in self._tasks:
@@ -96,6 +97,14 @@ class IntelligencePipeline:
         self.correlator.assign(ev)
         corroborating = self.correlator.corroboration(ev)
         self.scorer.score(ev, corroborating=len(corroborating))
+
+        # user watchlist: matching events jump the queue
+        watch_hit = self._watch_hit(ev)
+        if watch_hit:
+            ev.tags.append(f"watch:{watch_hit}")
+            if ev.priority in ("medium", "low", "ignore"):
+                ev.priority = "high"
+
         self.store.add(ev)
         self.counters["events"] += 1
 
@@ -125,6 +134,29 @@ class IntelligencePipeline:
         else:
             self.counters["ignored"] += 1
         return ev
+
+    # ---- watchlist -----------------------------------------------------------
+    def _watch_hit(self, ev: Event) -> str | None:
+        text = f"{ev.title} {ev.body}".lower()
+        for word in self.state.kv_get("watchlist", []):
+            if str(word).lower() in text:
+                return str(word)
+        return None
+
+    def watch_add(self, word: str) -> list:
+        wl = [str(w) for w in self.state.kv_get("watchlist", [])]
+        word = word.strip().lower()[:40]
+        if word and word not in wl:
+            wl.append(word)
+            self.state.kv_set("watchlist", wl[:20])  # cap at 20 terms
+            self.state.save()
+        return wl
+
+    def watch_remove(self, word: str) -> list:
+        wl = [w for w in self.state.kv_get("watchlist", []) if w != word.strip().lower()]
+        self.state.kv_set("watchlist", wl)
+        self.state.save()
+        return wl
 
     # ---- noise reduction helpers -----------------------------------------
     @staticmethod
@@ -207,6 +239,9 @@ class IntelligencePipeline:
         if history:
             dates = ", ".join(time.strftime("%b %d", time.gmtime(e.ts)) for e in history[:3])
             lines.append(f"<b>Historical comparison:</b> similar events on {html.escape(dates)}")
+        watch_tags = [t.split(":", 1)[1] for t in ev.tags if t.startswith("watch:")]
+        if watch_tags:
+            lines.append(f"⭐ <b>Watchlist match:</b> {html.escape(', '.join(watch_tags))}")
         if ev.escalation_hits:
             lines.append("⚡ " + html.escape(", ".join(ev.escalation_hits)))
         if ev.url:
@@ -241,6 +276,18 @@ class IntelligencePipeline:
         await self.notifier.broadcast("\n".join(lines), loud=False)
         for ev in batch:
             self.store.mark_sent(ev.id)
+
+    # ---- market tape: sample collector quotes into the time-series store ------
+    async def _tick_loop(self):
+        while True:
+            await asyncio.sleep(300)
+            try:
+                price = self.state.kv_get("cg:last_price")
+                volume = self.state.kv_get("cg:last_volume") or 0.0
+                if price:
+                    self.store.add_tick(float(price), float(volume))
+            except Exception:
+                log.exception("tick sampling failed")
 
     # ---- activity radar: unusual-surge detection across every layer -----------
     async def _radar_loop(self):

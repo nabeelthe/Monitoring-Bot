@@ -49,9 +49,13 @@ footer{color:var(--dim);font-size:11px;margin-top:16px}
 <h1>⛓ NUVA <span>INTELLIGENCE</span> <span style="float:right;font-size:11px;color:var(--dim)" id="clock"></span></h1>
 <div class="stats" id="stats"></div>
 <div class="grid">
- <div class="panel"><h2>Signal timeline</h2>
-  <input id="q" placeholder="Search events… (title/body)">
-  <div id="events"></div></div>
+ <div>
+  <div class="panel" style="margin-bottom:14px"><h2>HASH — 24h <span id="pxnow" style="float:right;color:var(--green)"></span></h2>
+   <canvas id="chart" height="120" style="width:100%"></canvas></div>
+  <div class="panel"><h2>Signal timeline</h2>
+   <input id="q" placeholder="Search events… (title/body)">
+   <div id="events"></div></div>
+ </div>
  <div>
   <div class="panel" style="margin-bottom:14px"><h2>Risk panel</h2><div id="risk"></div></div>
   <div class="panel" style="margin-bottom:14px"><h2>Predictions</h2><div id="preds"></div></div>
@@ -61,6 +65,29 @@ footer{color:var(--dim);font-size:11px;margin-top:16px}
 <footer id="foot"></footer>
 <script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function drawChart(){
+ try{
+  const d=await (await fetch('api/ticks?hours=24')).json();
+  const ticks=d.ticks||[]; const cv=document.getElementById('chart');
+  const ctx=cv.getContext('2d'); const W=cv.width=cv.clientWidth*2, H=cv.height=240;
+  ctx.clearRect(0,0,W,H);
+  if(ticks.length<2){ctx.fillStyle='#7a8494';ctx.font='24px sans-serif';
+   ctx.fillText('collecting price history…',20,H/2);return}
+  const ps=ticks.map(t=>t.price), lo=Math.min(...ps), hi=Math.max(...ps), pad=(hi-lo)||1;
+  const X=i=>i/(ticks.length-1)*(W-8)+4, Y=p=>H-12-((p-lo)/pad)*(H-24);
+  // volume bars
+  const vs=ticks.map(t=>t.volume||0), vmax=Math.max(...vs)||1;
+  ctx.fillStyle='rgba(83,155,245,.25)';
+  ticks.forEach((t,i)=>{const h=(vs[i]/vmax)*(H*0.25);ctx.fillRect(X(i)-1,H-h,2,h)});
+  // price line
+  ctx.beginPath();ctx.strokeStyle='#4cc38a';ctx.lineWidth=3;
+  ticks.forEach((t,i)=>{i?ctx.lineTo(X(i),Y(t.price)):ctx.moveTo(X(i),Y(t.price))});
+  ctx.stroke();
+  const last=ps[ps.length-1], first=ps[0], chg=first?((last-first)/first*100):0;
+  document.getElementById('pxnow').textContent=`$${last.toFixed(6)} (${chg>=0?'+':''}${chg.toFixed(2)}%)`;
+  document.getElementById('pxnow').style.color=chg>=0?'var(--green)':'var(--red)';
+ }catch(e){}}
+
 async function load(){
  try{
   const o=await (await fetch('api/overview')).json();
@@ -94,7 +121,7 @@ async function load(){
  }catch(e){document.getElementById('foot').textContent='refresh failed: '+e}}
 document.getElementById('q').addEventListener('input',()=>{clearTimeout(window._t);window._t=setTimeout(load,350)});
 setInterval(()=>{document.getElementById('clock').textContent=new Date().toUTCString().slice(17,25)+' UTC'},1000);
-load();setInterval(load,30000);
+load();drawChart();setInterval(load,30000);setInterval(drawChart,60000);
 </script></body></html>"""
 
 
@@ -121,6 +148,7 @@ class Dashboard:
         app.router.add_get("/", self._index)
         app.router.add_get("/api/overview", self._overview)
         app.router.add_get("/api/events", self._events)
+        app.router.add_get("/api/ticks", self._ticks)
         app.router.add_get("/healthz", self._health)
         app.router.add_get("/metrics", self._metrics)
         self._runner = web.AppRunner(app, access_log=None)
@@ -176,6 +204,14 @@ class Dashboard:
         else:
             events = self.pipeline.store.recent(hours, limit=limit)
         return web.json_response({"events": [e.to_dict() for e in events]})
+
+    async def _ticks(self, request):
+        try:
+            hours = min(float(request.query.get("hours", 24)), 24 * 90)
+        except ValueError:
+            hours = 24.0
+        rows = self.pipeline.store.ticks(hours)
+        return web.json_response({"ticks": [{"ts": t, "price": p, "volume": v} for t, p, v in rows]})
 
     async def _health(self, _request):
         failing = sum(1 for st in self.scheduler.statuses.values() if st.consecutive_failures >= 5)
