@@ -11,7 +11,10 @@ telegram:
   # Optional: pre-register a chat id; otherwise the first chat to /start the
   # bot becomes the owner. Extra chats can be whitelisted below.
   chat_id: "${TELEGRAM_CHAT_ID:-}"
-  allowed_chat_ids: []
+  # Additional users/groups allowed to use the bot (comma-separated ids in the
+  # env var, e.g. TELEGRAM_ALLOWED_CHAT_IDS=8762044154,123456789). Each must
+  # send /start once to begin receiving alerts.
+  allowed_chat_ids: "${TELEGRAM_ALLOWED_CHAT_IDS:-}"
 
 # ---------------------------------------------------------------------------
 # Intelligence pipeline (scoring, correlation, AI analyst, memory)
@@ -36,6 +39,13 @@ intelligence:
     model: "claude-opus-4-8"
     api_key: "${ANTHROPIC_API_KEY:-}"
     max_analyses_per_hour: 12     # cost guard; only critical/high events are analyzed
+  copilot:                        # ask the bot questions in chat (free-text or /ask)
+    enabled: true
+    max_questions_per_hour: 20    # cost guard; falls back to data summaries without a key
+  radar:                          # unusual-surge detection across every layer
+    enabled: true
+    min_events: 5                 # need at least this many events in the hour
+    multiplier: 4                 # ...and ≥4× the layer's normal hourly rate
 
 # ---------------------------------------------------------------------------
 # Smart alerting: critical/high immediate · medium digest · low reports-only

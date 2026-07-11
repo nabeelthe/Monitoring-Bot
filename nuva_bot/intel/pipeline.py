@@ -66,6 +66,8 @@ class IntelligencePipeline:
     def start(self):
         self._tasks.append(asyncio.create_task(self._digest_loop(), name="digest"))
         self._tasks.append(asyncio.create_task(self._report_loop(), name="reports"))
+        if self.config.getbool("intelligence.radar.enabled", True):
+            self._tasks.append(asyncio.create_task(self._radar_loop(), name="radar"))
 
     async def stop(self):
         for t in self._tasks:
@@ -239,6 +241,53 @@ class IntelligencePipeline:
         await self.notifier.broadcast("\n".join(lines), loud=False)
         for ev in batch:
             self.store.mark_sent(ev.id)
+
+    # ---- activity radar: unusual-surge detection across every layer -----------
+    async def _radar_loop(self):
+        min_events = self.config.getint("intelligence.radar.min_events", 5)
+        multiplier = self.config.getfloat("intelligence.radar.multiplier", 4.0)
+        while True:
+            await asyncio.sleep(900)
+            try:
+                await self._radar_scan(min_events, multiplier)
+            except Exception:
+                log.exception("radar scan failed")
+
+    async def _radar_scan(self, min_events: int, multiplier: float):
+        week = self.store.counts_by_layer(24 * 7)
+        hour = self.store.counts_by_layer(1)
+        for layer, n_hour in hour.items():
+            n_week = week.get(layer, 0)
+            if n_week < 30:
+                continue  # not enough baseline history to judge "unusual" yet
+            avg_hourly = n_week / (24 * 7)
+            if n_hour < max(min_events, avg_hourly * multiplier):
+                continue
+            last = float(self.state.kv_get(f"radar:last:{layer}", 0) or 0)
+            if time.time() - last < 6 * 3600:
+                continue  # already flagged this surge
+            self.state.kv_set(f"radar:last:{layer}", time.time())
+            factor = n_hour / avg_hourly if avg_hourly > 0 else float(n_hour)
+            # A radar hit is a computed cross-source anomaly, not a raw post from
+            # this layer — so it skips layer-credibility scoring and goes out
+            # directly at high priority.
+            ev = Event(
+                monitor="Activity Radar",
+                layer=layer,
+                title=f"Unusual surge: {n_hour} {layer} signals in the last hour (≈{factor:.0f}× normal)",
+                body=(f"Typical rate for this layer is about {avg_hourly:.1f} signal(s)/hour "
+                      f"over the past week. Sudden surges like this are often the earliest "
+                      f"sign that something is happening before any official announcement."),
+                priority_class="always",
+                confidence=85,
+                priority="high",
+            )
+            self.correlator.assign(ev)
+            ev.confidence, ev.priority = 85, "high"  # assign() doesn't score; keep ours
+            self.store.add(ev)
+            self.counters["events"] += 1
+            await self._send_immediate(ev)
+            log.info("radar: surge flagged in %s (%d/hr vs %.1f avg)", layer, n_hour, avg_hourly)
 
     # ---- scheduled reports ---------------------------------------------------
     async def _report_loop(self):

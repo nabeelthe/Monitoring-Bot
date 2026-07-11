@@ -12,6 +12,8 @@ _RULES: list[tuple[str, str]] = [
     (r"exploit|hack|drain|attack|phish", "⚠️ Possible security incident — money could be at risk. Treat with caution and verify before acting."),
     (r"depeg", "⚠️ A token that's supposed to hold a steady value may have slipped off it — a warning sign for the protocol."),
     (r"rug|scam|fake", "⚠️ Possible scam or fake announcement — do not click links or send funds until it's confirmed real."),
+    # cross-source anomaly
+    (r"unusual surge|signals in the last hour", "📡 Far more activity than normal is being detected — this often happens right before big news breaks."),
     # token / launch events
     (r"\btge\b|token generation", "🚀 Signs the token launch (TGE) is near — this is when NUVA first becomes buyable/tradable."),
     (r"airdrop", "🎁 A possible free token giveaway (airdrop) to holders — worth checking if you qualify."),

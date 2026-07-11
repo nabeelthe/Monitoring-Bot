@@ -12,6 +12,10 @@ log = logging.getLogger("nuva.commands")
 
 HELP = """<b>Nuva Intelligence Platform</b> — commands
 
+<b>🤖 AI Copilot</b>
+Just type any question — “what happened today?”, “why did price move?”,
+“should I worry?” (in groups, use /ask <i>question</i>)
+
 <b>Intelligence</b>
 /intelligence — top signals + stories right now
 /risk — 7-dimension risk panel
@@ -48,9 +52,18 @@ class CommandBot:
         self.scheduler = scheduler
         self.config = config
         self.pipeline = pipeline
+        self.copilot = None
+        if pipeline is not None:
+            from .intel.copilot import Copilot
+            self.copilot = Copilot(config, pipeline)
         self.username = ""
-        allowed = config.getlist("telegram.allowed_chat_ids")
-        self.allowed_ids = {int(x) for x in allowed if str(x).strip().lstrip("-").isdigit()}
+        # accepts a YAML list and/or comma-separated env-var strings
+        self.allowed_ids = set()
+        for entry in config.getlist("telegram.allowed_chat_ids"):
+            for part in str(entry).split(","):
+                part = part.strip()
+                if part.lstrip("-").isdigit():
+                    self.allowed_ids.add(int(part))
         self._task: asyncio.Task | None = None
 
     async def start(self):
@@ -102,7 +115,14 @@ class CommandBot:
         text = str(message.get("text") or "").strip()
         chat = message.get("chat") or {}
         chat_id = chat.get("id")
-        if not text.startswith("/") or chat_id is None:
+        if not text or chat_id is None:
+            return
+
+        # Free-text in a PRIVATE chat = a question for the AI copilot.
+        # (Groups must use /ask so the bot doesn't answer every message.)
+        if not text.startswith("/"):
+            if chat.get("type") == "private" and self._authorized(chat_id):
+                await self._ask(chat_id, text)
             return
 
         parts = text.split(maxsplit=1)
@@ -148,6 +168,8 @@ class CommandBot:
             await self._reply(chat_id, "🔊 Notifications back on.")
         elif cmd == "/check":
             await self._check(chat_id, arg)
+        elif cmd == "/ask":
+            await self._ask(chat_id, arg)
         elif cmd in ("/intelligence", "/intel"):
             await self._intelligence(chat_id)
         elif cmd == "/risk":
@@ -226,6 +248,20 @@ class CommandBot:
     # ---- intelligence commands -------------------------------------------
     def _need_pipeline(self) -> bool:
         return self.pipeline is None
+
+    async def _ask(self, chat_id: int, question: str):
+        if self.copilot is None:
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        if not question.strip():
+            return await self._reply(
+                chat_id,
+                "Ask me anything about what I'm watching — e.g. /ask what happened today?")
+        try:  # show "typing…" while the copilot thinks
+            await self.client.api("sendChatAction", chat_id=chat_id, action="typing", http_timeout=10)
+        except TelegramError:
+            pass
+        answer = await self.copilot.answer(question)
+        await self._reply(chat_id, answer)
 
     async def _intelligence(self, chat_id: int):
         if self._need_pipeline():
