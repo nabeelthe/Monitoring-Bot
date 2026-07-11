@@ -2,8 +2,9 @@
 
 "Why did price move?" · "What happened today?" · "Should I worry?" ·
 "Summarize the last week." The copilot assembles live context (recent events,
-stories, risk panel, predictions, price) and answers via Claude in plain
-language. Without an API key it returns a structured data summary instead.
+stories, risk panel, predictions, price) and answers via Claude or OpenRouter
+(shared LLMClient) in plain language. Without any AI key it returns a
+structured data summary instead.
 """
 
 import asyncio
@@ -31,16 +32,15 @@ class Copilot:
         self.pipeline = pipeline
         sec = config.section("intelligence.copilot")
         self.enabled = config.getbool("intelligence.copilot.enabled", True)
-        self.model = str(sec.get("model") or config.get("intelligence.ai.model", "claude-opus-4-8"))
         self.max_per_hour = int(sec.get("max_questions_per_hour", 20))
         self._stamps: list[float] = []
-        self._client = None
+        self.llm = None
         if self.enabled:
-            try:
-                import anthropic  # noqa: PLC0415 — optional dependency
-                self._client = anthropic.AsyncAnthropic()
-            except Exception as exc:
-                log.warning("anthropic SDK unavailable (%s) — copilot uses data summaries", exc)
+            from .llm import LLMClient  # noqa: PLC0415
+            client = LLMClient(config)
+            if client.available:
+                self.llm = client
+                log.info("Copilot provider: %s", client.describe())
 
     def _budget_ok(self) -> bool:
         now = time.time()
@@ -83,7 +83,7 @@ class Copilot:
         if not question:
             return "Ask me anything about what I'm monitoring — e.g. “what happened today?” or “should I worry?”"
 
-        if self._client is not None and self._budget_ok():
+        if self.llm is not None and self._budget_ok():
             try:
                 self._stamps.append(time.time())
                 return await asyncio.wait_for(self._ai_answer(question), timeout=90)
@@ -92,26 +92,17 @@ class Copilot:
         return self._fallback_answer()
 
     async def _ai_answer(self, question: str) -> str:
-        response = await self._client.messages.create(
-            model=self.model,
-            max_tokens=900,
+        text = await self.llm.chat(
             system=SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": f"{self._context()}\n\n=== QUESTION ===\n{question}",
-            }],
+            user=f"{self._context()}\n\n=== QUESTION ===\n{question}",
+            max_tokens=900,
         )
-        if response.stop_reason == "refusal":
-            raise RuntimeError("model declined")
-        text = next((b.text for b in response.content if b.type == "text"), "").strip()
-        if not text:
-            raise RuntimeError("empty answer")
         return "🤖 " + html.escape(text)
 
     def _fallback_answer(self) -> str:
         """No AI available: answer with a structured summary of the live data."""
         p = self.pipeline
-        parts = ["🤖 <b>Here's what the data shows</b> (add ANTHROPIC_API_KEY for conversational answers):", ""]
+        parts = ["🤖 <b>Here's what the data shows</b> (add ANTHROPIC_API_KEY or OPENROUTER_API_KEY for conversational answers):", ""]
         price = p.state.kv_get("cg:last_price")
         if price:
             parts.append(f"HASH price: ${price:,.6f}")

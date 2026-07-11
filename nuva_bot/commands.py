@@ -156,11 +156,14 @@ class CommandBot:
 
         if cmd == "/start":
             title = chat.get("title") or chat.get("username") or chat.get("first_name") or ""
+            is_admin = self._is_admin(chat_id)
+            admin_note = ("\n\n👑 <b>You've been granted admin access</b> — you can use "
+                          "/mute /watch /check /digest in addition to everything else.") if is_admin else ""
             if self.state.add_chat(chat_id, title):
                 self.state.save()
-                await self._reply(chat_id, f"✅ Registered. All Nuva Labs monitoring alerts will arrive here.\n\n{HELP}")
+                await self._reply(chat_id, f"✅ Registered. All Nuva Labs monitoring alerts will arrive here.{admin_note}\n\n{HELP}")
             else:
-                await self._reply(chat_id, "Already registered. " + HELP)
+                await self._reply(chat_id, f"Already registered.{admin_note}\n\n" + HELP)
         elif cmd == "/help":
             await self._reply(chat_id, HELP)
         elif cmd == "/status":

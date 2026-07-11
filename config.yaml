@@ -36,10 +36,15 @@ intelligence:
     blog: 65
     news: 58
     social: 45
-  ai:                             # AI analyst (Claude API); falls back to rule-based briefs
+  ai:                             # AI analyst — falls back to rule-based briefs with no key
     enabled: true
+    # auto: Claude if ANTHROPIC_API_KEY is set, else OpenRouter if OPENROUTER_API_KEY
+    # is set, else rule-based. Force one with "anthropic" or "openrouter".
+    provider: "auto"
     model: "claude-opus-4-8"
     api_key: "${ANTHROPIC_API_KEY:-}"
+    openrouter_api_key: "${OPENROUTER_API_KEY:-}"
+    openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"
     max_analyses_per_hour: 12     # cost guard; only critical/high events are analyzed
   copilot:                        # ask the bot questions in chat (free-text or /ask)
     enabled: true

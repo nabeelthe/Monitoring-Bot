@@ -3,19 +3,20 @@
 For critical/high events, produce an analyst brief answering: what happened,
 why it matters, how confident we are, suggested action, what to monitor next.
 
-Uses the Claude API (official anthropic SDK) when ANTHROPIC_API_KEY is set;
-otherwise falls back to a deterministic rule-based analyst so the platform
-degrades gracefully — never silently loses the intelligence layer.
+Uses Claude (ANTHROPIC_API_KEY) or, if unset, OpenRouter (OPENROUTER_API_KEY)
+via the shared LLMClient; otherwise falls back to a deterministic rule-based
+analyst so the platform degrades gracefully — never silently loses the
+intelligence layer.
 """
 
 import asyncio
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 
 from .events import Event
+from .llm import extract_json
 from .plain import humanize
 
 log = logging.getLogger("nuva.analyst")
@@ -69,22 +70,16 @@ def _fmt_event_line(e: Event) -> str:
 class Analyst:
     def __init__(self, config):
         sec = config.section("intelligence.ai")
-        self.model = str(sec.get("model", "claude-opus-4-8"))
         self.max_per_hour = int(sec.get("max_analyses_per_hour", 12))
         self.enabled = config.getbool("intelligence.ai.enabled", True)
         self._stamps: list[float] = []
-        self._client = None
+        self.llm = None
         if self.enabled:
-            try:
-                import anthropic  # noqa: PLC0415 — optional dependency
-                api_key = str(sec.get("api_key") or "").strip() or None
-                # zero-arg client also resolves ANTHROPIC_API_KEY / auth profiles
-                self._client = anthropic.AsyncAnthropic(api_key=api_key) if api_key else anthropic.AsyncAnthropic()
-                if not (api_key or os.environ.get("ANTHROPIC_API_KEY")):
-                    log.info("no ANTHROPIC_API_KEY — AI analyst will fall back to rule-based briefs")
-            except Exception as exc:  # missing package, bad env
-                log.warning("anthropic SDK unavailable (%s) — using rule-based analyst", exc)
-                self._client = None
+            from .llm import LLMClient  # noqa: PLC0415
+            self.llm = LLMClient(config)
+            log.info("AI analyst provider: %s", self.llm.describe())
+            if not self.llm.available:
+                self.llm = None
 
     def _budget_ok(self) -> bool:
         now = time.time()
@@ -92,15 +87,15 @@ class Analyst:
         return len(self._stamps) < self.max_per_hour
 
     async def analyze(self, ev: Event, context: dict) -> Brief:
-        if self._client is not None and self._budget_ok():
+        if self.llm is not None and self._budget_ok():
             try:
                 self._stamps.append(time.time())
-                return await asyncio.wait_for(self._ai_brief(ev, context), timeout=90)
+                return await asyncio.wait_for(self._ai_brief(ev, context), timeout=120)
             except Exception as exc:
                 log.warning("AI analysis failed (%s); using rule-based brief", exc)
         return self.rule_brief(ev, context)
 
-    # ---- Claude-powered analysis ---------------------------------------
+    # ---- AI-powered analysis (Claude or OpenRouter, via LLMClient) --------
     async def _ai_brief(self, ev: Event, context: dict) -> Brief:
         related = context.get("related") or []
         history = context.get("history") or []
@@ -114,20 +109,13 @@ class Analyst:
             "correlated_signals_same_story": [_fmt_event_line(e) for e in related[:12]],
             "similar_past_events": [_fmt_event_line(e) for e in history[:5]],
         }
-        response = await self._client.messages.create(
-            model=self.model,
-            max_tokens=1500,
+        text = await self.llm.chat(
             system=SYSTEM_PROMPT,
-            output_config={"format": {"type": "json_schema", "schema": BRIEF_SCHEMA}},
-            messages=[{
-                "role": "user",
-                "content": "Analyze this detected event:\n\n" + json.dumps(payload, indent=1),
-            }],
+            user="Analyze this detected event:\n\n" + json.dumps(payload, indent=1),
+            max_tokens=1500,
+            schema=BRIEF_SCHEMA,
         )
-        if response.stop_reason == "refusal":
-            raise RuntimeError("model refused analysis request")
-        text = next(b.text for b in response.content if b.type == "text")
-        data = json.loads(text)
+        data = json.loads(extract_json(text))
         return Brief(
             summary=data["summary"],
             plain_summary=data.get("plain_summary") or humanize(ev.layer, ev.title, ev.body),
