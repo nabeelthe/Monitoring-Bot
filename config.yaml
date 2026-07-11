@@ -11,9 +11,11 @@ telegram:
   # Optional: pre-register a chat id; otherwise the first chat to /start the
   # bot becomes the owner. Extra chats can be whitelisted below.
   chat_id: "${TELEGRAM_CHAT_ID:-}"
-  # Additional users/groups allowed to use the bot (comma-separated ids in the
-  # env var, e.g. TELEGRAM_ALLOWED_CHAT_IDS=8762044154,123456789). Each must
-  # send /start once to begin receiving alerts.
+  # public: anyone can /start, receive alerts and use read/AI commands.
+  # Global controls (/mute, /watch, /check, /digest) stay admin-only.
+  public: "${TELEGRAM_PUBLIC:-true}"
+  # Admins = the owner (first chat to /start) + these ids (comma-separated).
+  # In private mode (public: false) this doubles as the access allowlist.
   allowed_chat_ids: "${TELEGRAM_ALLOWED_CHAT_IDS:-}"
 
 # ---------------------------------------------------------------------------

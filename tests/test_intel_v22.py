@@ -117,3 +117,39 @@ def test_radar_quiet_without_baseline(tmp_path):
     run(pipe._radar_scan(min_events=5, multiplier=4.0))
     assert pipe.notifier.sent == []
     pipe.store.close()
+
+
+# ---- public mode ----------------------------------------------------------------
+
+def _bot(cfg_dict, state=None):
+    from nuva_bot.commands import CommandBot
+
+    class FakeScheduler:
+        statuses = {}
+        started_at = time.time()
+
+    return CommandBot(client=None, state=state or State("/tmp/none-z.json"),
+                      scheduler=FakeScheduler(), config=Config(cfg_dict))
+
+
+def test_public_mode_authorizes_anyone(tmp_path):
+    bot = _bot({"telegram": {"public": True}}, State(tmp_path / "s.json"))
+    assert bot._authorized(999999)  # total stranger
+
+
+def test_private_mode_still_restricts(tmp_path):
+    st = State(tmp_path / "s.json")
+    st.add_chat(111, "owner")
+    bot = _bot({"telegram": {"public": False, "allowed_chat_ids": "222"}}, st)
+    assert bot._authorized(111) and bot._authorized(222)
+    assert not bot._authorized(999999)
+
+
+def test_admin_is_owner_or_allowlisted(tmp_path):
+    st = State(tmp_path / "s.json")
+    st.add_chat(111, "owner")
+    st.add_chat(555, "regular user")
+    bot = _bot({"telegram": {"public": True, "allowed_chat_ids": "222"}}, st)
+    assert bot._is_admin(111)       # owner (first chat)
+    assert bot._is_admin(222)       # allowlisted
+    assert not bot._is_admin(555)   # regular public user

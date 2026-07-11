@@ -123,5 +123,12 @@ class Notifier:
                     await self._client.send_message(chat["id"], text, silent=silent)
                     self.sent_count += 1
                 except TelegramError as exc:
-                    log.error("send to chat %s failed: %s", chat["id"], exc)
+                    msg = str(exc).lower()
+                    if "blocked" in msg or "chat not found" in msg or "deactivated" in msg:
+                        # user blocked the bot / deleted account — stop broadcasting to them
+                        if self._state.remove_chat(chat["id"]):
+                            self._state.save()
+                            log.info("removed unreachable chat %s (%s)", chat["id"], exc)
+                    else:
+                        log.error("send to chat %s failed: %s", chat["id"], exc)
                 self._last_send = time.monotonic()

@@ -62,6 +62,7 @@ class CommandBot:
             from .intel.copilot import Copilot
             self.copilot = Copilot(config, pipeline)
         self.username = ""
+        self.public = config.getbool("telegram.public", False)
         # accepts a YAML list and/or comma-separated env-var strings
         self.allowed_ids = set()
         for entry in config.getlist("telegram.allowed_chat_ids"):
@@ -69,6 +70,7 @@ class CommandBot:
                 part = part.strip()
                 if part.lstrip("-").isdigit():
                     self.allowed_ids.add(int(part))
+        self._last_ask: dict[int, float] = {}  # per-chat copilot cooldown
         self._task: asyncio.Task | None = None
 
     async def start(self):
@@ -110,11 +112,21 @@ class CommandBot:
                     log.exception("command handling failed")
 
     def _authorized(self, chat_id: int) -> bool:
+        if self.public:
+            return True  # open bot: anyone can use it
         if any(c["id"] == chat_id for c in self.state.chats):
             return True
         if self.allowed_ids:
             return chat_id in self.allowed_ids
         return not self.state.chats  # first chat to talk to the bot becomes the owner
+
+    def _is_admin(self, chat_id: int) -> bool:
+        """Admins may change global state (mute, watchlist, manual polls).
+        Admin = the owner (first registered chat) or an explicitly allowed id."""
+        if chat_id in self.allowed_ids:
+            return True
+        chats = self.state.chats
+        return bool(chats) and chats[0]["id"] == chat_id
 
     async def _handle(self, message: dict):
         text = str(message.get("text") or "").strip()
@@ -157,6 +169,9 @@ class CommandBot:
             await self._reply(chat_id, self._sources_text())
         elif cmd == "/price":
             await self._price(chat_id)
+        elif cmd in ("/mute", "/unmute", "/check", "/digest", "/watch", "/unwatch") \
+                and self.public and not self._is_admin(chat_id):
+            await self._reply(chat_id, "🔒 That command changes settings for everyone, so it's admin-only. All the viewing commands (/terminal, /chart, /intelligence, /ask…) are open to you.")
         elif cmd == "/mute":
             minutes = 60.0
             try:
@@ -298,6 +313,10 @@ class CommandBot:
             return await self._reply(
                 chat_id,
                 "Ask me anything about what I'm watching — e.g. /ask what happened today?")
+        now = time.time()
+        if now - self._last_ask.get(chat_id, 0) < 10:  # per-user cooldown
+            return await self._reply(chat_id, "⏳ One question at a time — try again in a few seconds.")
+        self._last_ask[chat_id] = now
         try:  # show "typing…" while the copilot thinks
             await self.client.api("sendChatAction", chat_id=chat_id, action="typing", http_timeout=10)
         except TelegramError:
