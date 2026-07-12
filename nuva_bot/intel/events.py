@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 PRIORITIES = ("critical", "high", "medium", "low", "ignore")
@@ -62,6 +63,11 @@ class EventStore:
                 ts REAL NOT NULL, price REAL, volume REAL
             );
             CREATE INDEX IF NOT EXISTS idx_ticks_ts ON ticks(ts);
+            CREATE TABLE IF NOT EXISTS wallet_flows(
+                ts REAL NOT NULL, chain TEXT, wallet TEXT,
+                direction TEXT, amount REAL, denom TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_wallet_flows ON wallet_flows(chain, wallet, ts);
         """)
         self._db.commit()
 
@@ -199,3 +205,32 @@ class EventStore:
                 (time.time() - hours * 3600, limit),
             ).fetchall()
         return [(r["ts"], r["price"], r["volume"]) for r in rows]
+
+    # ---- wallet flows (for Wallet Intelligence) ----------------------------
+    def record_wallet_flow(self, chain: str, wallet: str, direction: str,
+                           amount: float, denom: str = "", ts: float | None = None):
+        if not wallet or amount is None or amount <= 0 or direction not in ("in", "out"):
+            return
+        ts = ts or time.time()
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO wallet_flows VALUES (?,?,?,?,?,?)",
+                (ts, chain, wallet.lower(), direction, float(amount), denom),
+            )
+            self._db.execute("DELETE FROM wallet_flows WHERE ts < ?", (ts - 30 * 86400,))
+            self._db.commit()
+
+    def wallet_daily_flows(self, chain: str, days: float = 7) -> dict:
+        """{wallet: {'YYYY-MM-DD': {'in': x, 'out': y}}} for the window."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, wallet, direction, amount FROM wallet_flows "
+                "WHERE chain=? AND ts >= ? ORDER BY ts ASC",
+                (chain, time.time() - days * 86400),
+            ).fetchall()
+        out: dict = {}
+        for r in rows:
+            day = datetime.fromtimestamp(r["ts"], timezone.utc).strftime("%Y-%m-%d")
+            bucket = out.setdefault(r["wallet"], {}).setdefault(day, {"in": 0.0, "out": 0.0})
+            bucket[r["direction"]] += r["amount"]
+        return out

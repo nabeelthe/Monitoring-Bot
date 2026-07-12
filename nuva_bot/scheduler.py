@@ -31,7 +31,7 @@ class Scheduler:
         self.notifier = notifier
         self.state = state
         self.pipeline = pipeline  # IntelligencePipeline; None = plain v1 alerting
-        self.ctx = Context(session, state, config)
+        self.ctx = Context(session, state, config, wallets=(pipeline.wallets if pipeline else None))
         self.statuses = {m.name: MonitorStatus(m) for m in monitors}
         self.started_at = time.time()
         self._tasks: list[asyncio.Task] = []

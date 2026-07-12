@@ -22,8 +22,10 @@ from .correlator import Correlator
 from .events import Event, EventStore
 from .predict import Predictor
 from .reports import ReportGenerator, PRIORITY_EMOJI
+from .plain import confidence_word
 from .risk import RiskEngine
 from .scoring import ConfidenceScorer
+from .wallets import WalletIntel, format_wallet
 
 log = logging.getLogger("nuva.pipeline")
 
@@ -45,6 +47,7 @@ class IntelligencePipeline:
         self.analyst = Analyst(config)
         self.risk = RiskEngine(self.store)
         self.predictor = Predictor(self.store)
+        self.wallets = WalletIntel(config, self.store)
         self.reports = ReportGenerator(self.store, self.risk, self.predictor, state)
 
         self.digest_interval = config.getint("alerting.digest_interval_seconds", 1800)
@@ -69,6 +72,8 @@ class IntelligencePipeline:
         if self.config.getbool("intelligence.radar.enabled", True):
             self._tasks.append(asyncio.create_task(self._radar_loop(), name="radar"))
         self._tasks.append(asyncio.create_task(self._tick_loop(), name="ticks"))
+        if self.wallets.enabled:
+            self._tasks.append(asyncio.create_task(self._wallet_loop(), name="wallets"))
 
     async def stop(self):
         for t in self._tasks:
@@ -219,8 +224,9 @@ class IntelligencePipeline:
         lines += [
             html.escape(brief.why_it_matters[:400]),
             "",
-            f"Confidence: <b>{ev.confidence}%</b> · Assessment: <b>{brief.assessment}</b>"
-            + (" · 🧑‍💻 investigate" if brief.needs_human else ""),
+            f"📊 Confidence: <b>{ev.confidence}%</b> ({confidence_word(ev.confidence)}) "
+            f"· Outlook: <b>{brief.assessment}</b>"
+            + (" · 🧑‍💻 worth a human look" if brief.needs_human else ""),
         ]
         cross = context.get("cross_layer") or []
         if cross:
@@ -288,6 +294,52 @@ class IntelligencePipeline:
                     self.store.add_tick(float(price), float(volume))
             except Exception:
                 log.exception("tick sampling failed")
+
+    # ---- wallet intelligence: flag daily buy+sell (churn) wallets -------------
+    async def _wallet_loop(self):
+        while True:
+            await asyncio.sleep(self.wallets.scan_interval)
+            try:
+                await self._wallet_scan()
+            except Exception:
+                log.exception("wallet scan failed")
+
+    async def _wallet_scan(self):
+        """Wallet alerts are deterministic (built straight from real volume
+        numbers) and skip the AI analyst overlay — the numbers already ARE
+        the analysis, and this keeps the output crisp and jargon-free."""
+        price = self.state.kv_get("cg:last_price")
+        for chain in ("ethereum", "provenance"):
+            for w in self.wallets.active_traders(chain):
+                key = f"wallet:flagged:{chain}:{w.wallet}"
+                last = float(self.state.kv_get(key, 0) or 0)
+                if time.time() - last < 24 * 3600:  # re-flag a given wallet at most once/day
+                    continue
+                self.state.kv_set(key, time.time())
+                price_hint = price if chain == "provenance" else None  # no NUVA market price pre-TGE
+                await self._send_wallet_alert(chain, w, price_hint)
+        self.state.save()
+
+    async def _send_wallet_alert(self, chain: str, w, price_hint: float | None):
+        title = f"🔁 Active trader wallet: {w.short} — {w.days_active}/{w.window_days} days"
+        ev = Event(
+            monitor="Wallet Intelligence", layer=("ethereum" if chain == "ethereum" else "onchain"),
+            title=title, body=f"bought and sold {w.denom} daily; net {w.net:+,.0f} {w.denom}",
+            priority_class="always", confidence=90, priority="high",
+        )
+        self.correlator.assign(ev)
+        self.store.add(ev)
+        self.counters["events"] += 1
+
+        text = (f"🔁 <b>HIGH PRIORITY</b> · 👛 Wallet Intelligence\n\n"
+                f"<b>{html.escape(title)}</b>\n"
+                f"🗣 <b>In plain terms:</b> This wallet keeps buying and selling the "
+                f"same token, day after day — that's a trading/bot pattern, not "
+                f"someone holding long-term.\n\n"
+                f"{format_wallet(w, price_hint, explain=False)}")
+        await self.notifier.broadcast(text, loud=True)
+        self.store.mark_sent(ev.id)
+        self.counters["sent"] += 1
 
     # ---- activity radar: unusual-surge detection across every layer -----------
     async def _radar_loop(self):

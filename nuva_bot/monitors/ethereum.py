@@ -73,9 +73,15 @@ class EtherscanMonitor(Monitor):
                     numeric = float(amount.replace(",", ""))
                 except ValueError:
                     numeric = 0.0
+                symbol = tx.get("tokenSymbol") or "TOKEN"
+                # Wallet Intelligence: record every real wallet-to-wallet transfer
+                # (not mint/burn against the zero address) regardless of alert size —
+                # day-trader detection needs full activity, not just large transfers.
+                if ctx.wallets and numeric > 0 and not is_mint and not is_burn:
+                    ctx.wallets.record("ethereum", tx.get("from", ""), "out", numeric, symbol)
+                    ctx.wallets.record("ethereum", tx.get("to", ""), "in", numeric, symbol)
                 if not (is_mint or is_burn) and numeric < self.min_token_amount:
                     continue
-                symbol = tx.get("tokenSymbol") or "TOKEN"
                 kind = "MINT 🟢" if is_mint else ("BURN 🔴" if is_burn else "Transfer")
                 alerts.append(Alert(
                     monitor=self.name,

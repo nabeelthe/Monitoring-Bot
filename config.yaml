@@ -53,6 +53,16 @@ intelligence:
     enabled: true
     min_events: 5                 # need at least this many events in the hour
     multiplier: 4                 # ...and ≥4× the layer's normal hourly rate
+  wallets:                        # Wallet Intelligence — flags daily buy+sell (churn) wallets
+    enabled: true
+    window_days: 7                # look back this many days for the pattern
+    min_days_both: 3              # must show BOTH buy and sell activity on this many days
+    min_daily_amount: 100         # a day only counts once buy+sell each clear this amount
+    scan_interval_seconds: 1800   # how often to re-scan for newly-qualifying wallets
+    # optional: label known addresses (treasury, foundation, exchange, team...)
+    known_labels: {}
+      # "0xabc...": "Foundation treasury"
+      # "cosmos1...": "Known exchange hot wallet"
 
 # ---------------------------------------------------------------------------
 # Smart alerting: critical/high immediate · medium digest · low reports-only

@@ -20,6 +20,7 @@ Just type any question — “what happened today?”, “why did price move?”
 /terminal — everything on one screen (price, risk, signals, predictions)
 /chart <i>[hours]</i> — price + volume chart
 /watch <i>word</i> · /unwatch <i>word</i> — personal watchlist (matching events jump the queue)
+/wallets — wallets that buy AND sell daily (active-trader pattern)
 
 <b>Intelligence</b>
 /intelligence — top signals + stories right now
@@ -201,6 +202,8 @@ class CommandBot:
             await self._watch(chat_id, arg, add=True)
         elif cmd in ("/unwatch", "/watchlist"):
             await self._watch(chat_id, arg, add=(cmd == "/watch"))
+        elif cmd == "/wallets":
+            await self._wallets(chat_id)
         elif cmd in ("/intelligence", "/intel"):
             await self._intelligence(chat_id)
         elif cmd == "/risk":
@@ -308,6 +311,24 @@ class CommandBot:
             return await self._reply(chat_id, f"Removed. Watchlist: {html.escape(', '.join(wl)) or '(empty)'}")
         wl = self.pipeline.state.kv_get("watchlist", [])
         await self._reply(chat_id, "⭐ Watchlist: " + (html.escape(", ".join(wl)) if wl else "(empty — add with /watch <i>word</i>)"))
+
+    async def _wallets(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        from .intel.wallets import format_wallet
+        price = self.pipeline.state.kv_get("cg:last_price")
+        lines = ["👛 <b>Wallet Intelligence</b> — wallets buying AND selling daily", ""]
+        found = 0
+        for chain, price_hint in (("ethereum", None), ("provenance", price)):
+            for w in self.pipeline.wallets.active_traders(chain)[:5]:
+                lines.append(format_wallet(w, price_hint))
+                lines.append("")
+                found += 1
+        if not found:
+            lines.append("No active-trader wallets flagged yet. This needs a few days of "
+                         "transfer history to build a pattern — check back soon, or once "
+                         "NUVA contract addresses are configured for the Ethereum side.")
+        await self._reply(chat_id, "\n".join(lines).strip())
 
     async def _ask(self, chat_id: int, question: str):
         if self.copilot is None:

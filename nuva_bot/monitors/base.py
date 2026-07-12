@@ -19,10 +19,11 @@ class FetchError(Exception):
 class Context:
     """Everything a monitor needs during a poll cycle."""
 
-    def __init__(self, session: aiohttp.ClientSession, state, config):
+    def __init__(self, session: aiohttp.ClientSession, state, config, wallets=None):
         self.session = session
         self.state = state
         self.config = config
+        self.wallets = wallets  # WalletIntel, or None when intelligence is disabled
 
 
 class Monitor:

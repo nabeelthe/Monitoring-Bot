@@ -14,6 +14,7 @@ _RULES: list[tuple[str, str]] = [
     (r"rug|scam|fake", "⚠️ Possible scam or fake announcement — do not click links or send funds until it's confirmed real."),
     # cross-source anomaly
     (r"unusual surge|signals in the last hour", "📡 Far more activity than normal is being detected — this often happens right before big news breaks."),
+    (r"active trader wallet|bought and sold", "🔁 A wallet keeps buying and selling the same token daily — a trading/bot pattern, not someone holding long-term."),
     # token / launch events
     (r"\btge\b|token generation", "🚀 Signs the token launch (TGE) is near — this is when NUVA first becomes buyable/tradable."),
     (r"airdrop", "🎁 A possible free token giveaway (airdrop) to holders — worth checking if you qualify."),
@@ -64,3 +65,16 @@ def humanize(layer: str, title: str, body: str = "") -> str:
         "social": "💬 New social-media activity about Nuva/Provenance.",
         "news": "🗞️ A news mention of Nuva/Provenance.",
     }.get(layer, "🔔 A monitored source reported new activity.")
+
+
+def confidence_word(pct: int) -> str:
+    """Turn a raw confidence percentage into a word a layman reads instantly."""
+    if pct >= 85:
+        return "very high"
+    if pct >= 70:
+        return "high"
+    if pct >= 50:
+        return "moderate"
+    if pct >= 30:
+        return "low"
+    return "very low"

@@ -56,6 +56,16 @@ def _extract_hash_amount(tx: dict) -> float:
     return best
 
 
+def _extract_addresses(tx: dict) -> tuple[str | None, str | None]:
+    """Best-effort (from, to) address extraction — explorer summary shapes vary."""
+    msg = tx.get("msg") or {}
+    frm = (msg.get("fromAddress") or msg.get("from") or msg.get("sender")
+           or tx.get("fromAddress") or tx.get("sender"))
+    to = (msg.get("toAddress") or msg.get("to") or msg.get("recipient")
+          or tx.get("toAddress") or tx.get("recipient"))
+    return (str(frm) if frm else None, str(to) if to else None)
+
+
 class ProvenanceExplorerMonitor(Monitor):
     """Big-transaction feed: significant mints/burns, vault issuance, large transfers.
 
@@ -102,6 +112,7 @@ class ProvenanceExplorerMonitor(Monitor):
 
         results = data.get("results") or data.get("txs") or []
         interesting = []
+        transfer_like = []
         for tx in results:
             if not isinstance(tx, dict):
                 continue
@@ -111,6 +122,22 @@ class ProvenanceExplorerMonitor(Monitor):
             blob = f"{msg_type} {tx.get('monikers')} {tx.get('feepayer')}".lower()
             if any(k in blob for k in self.msg_keywords):
                 interesting.append((tx_hash, msg_type, tx, blob))
+            # Wallet Intelligence: track genuine P2P transfers (not mints/burns/
+            # vault ops, which don't represent trading) for day-trader detection.
+            if ("send" in msg_type.lower() or "transfer" in msg_type.lower()) \
+                    and not any(s in msg_type.lower() for s in STRUCTURAL):
+                transfer_like.append((tx_hash, tx))
+
+        if ctx.wallets and transfer_like:
+            fresh_transfers = set(self.new_ids(ctx, [h for h, _ in transfer_like], ns=f"{self.name}:flows"))
+            for tx_hash, tx in transfer_like:
+                if tx_hash not in fresh_transfers:
+                    continue
+                frm, to = _extract_addresses(tx)
+                amount = _extract_hash_amount(tx)
+                if frm and to and amount > 0:
+                    ctx.wallets.record("provenance", frm, "out", amount, "HASH")
+                    ctx.wallets.record("provenance", to, "in", amount, "HASH")
 
         fresh = set(self.new_ids(ctx, [h for h, *_ in interesting]))
         alerts = []
