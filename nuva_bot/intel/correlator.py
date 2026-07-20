@@ -5,7 +5,6 @@ announcement is ONE story. An event joins an active story when it shares a
 signal tag with it inside the correlation window; otherwise it starts one.
 """
 
-import time
 import uuid
 
 from .events import Event, EventStore

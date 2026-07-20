@@ -5,4 +5,4 @@ pipeline: correlation into stories, confidence scoring, AI analysis, risk
 engine, predictions, executive reports, a live dashboard and a Telegram bot.
 """
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"

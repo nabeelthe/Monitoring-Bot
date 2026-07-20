@@ -68,6 +68,14 @@ class EventStore:
                 direction TEXT, amount REAL, denom TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_wallet_flows ON wallet_flows(chain, wallet, ts);
+            CREATE TABLE IF NOT EXISTS outcomes(
+                event_id TEXT PRIMARY KEY,
+                ts REAL NOT NULL,
+                kind TEXT NOT NULL,
+                ret_1h REAL, ret_24h REAL,
+                done_1h INTEGER DEFAULT 0, done_24h INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_outcomes_kind ON outcomes(kind);
         """)
         self._db.commit()
 
@@ -233,4 +241,73 @@ class EventStore:
             day = datetime.fromtimestamp(r["ts"], timezone.utc).strftime("%Y-%m-%d")
             bucket = out.setdefault(r["wallet"], {}).setdefault(day, {"in": 0.0, "out": 0.0})
             bucket[r["direction"]] += r["amount"]
+        return out
+
+    # ---- signal outcomes (self-measured hit rates) --------------------------
+    def price_near(self, ts: float, tolerance: float = 900) -> float | None:
+        """Closest recorded price within ±tolerance seconds of ts, else None."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT price FROM ticks WHERE ts BETWEEN ? AND ? AND price > 0 "
+                "ORDER BY ABS(ts - ?) ASC LIMIT 1",
+                (ts - tolerance, ts + tolerance, ts),
+            ).fetchone()
+        return row["price"] if row else None
+
+    def outcome_record(self, event_id: str, ts: float, kind: str):
+        with self._lock:
+            self._db.execute(
+                "INSERT OR IGNORE INTO outcomes(event_id, ts, kind) VALUES (?,?,?)",
+                (event_id, ts, kind),
+            )
+            self._db.commit()
+
+    def outcomes_pending(self, horizon: str, before_ts: float, limit: int = 200) -> list[tuple[str, float]]:
+        """(event_id, ts) rows whose `horizon` ('1h'|'24h') is not yet annotated
+        and whose measurement time has passed."""
+        col = "done_1h" if horizon == "1h" else "done_24h"
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT event_id, ts FROM outcomes WHERE {col}=0 AND ts <= ? LIMIT ?",
+                (before_ts, limit),
+            ).fetchall()
+        return [(r["event_id"], r["ts"]) for r in rows]
+
+    def outcome_set(self, event_id: str, horizon: str, ret: float | None):
+        """Mark a horizon measured; ret may be None (no price data ⇒ excluded from stats)."""
+        col_ret = "ret_1h" if horizon == "1h" else "ret_24h"
+        col_done = "done_1h" if horizon == "1h" else "done_24h"
+        with self._lock:
+            self._db.execute(
+                f"UPDATE outcomes SET {col_ret}=?, {col_done}=1 WHERE event_id=?",
+                (ret, event_id),
+            )
+            self._db.commit()
+
+    def hit_rates(self, min_n: int = 3, positive_pct: float = 2.0) -> dict:
+        """Per signal kind: how often a measured +move followed, and average returns.
+        {kind: {n, up_rate, avg_1h, avg_24h}} — only kinds with >= min_n samples."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT kind, ret_1h, ret_24h FROM outcomes WHERE done_24h=1 AND ret_24h IS NOT NULL",
+            ).fetchall()
+        agg: dict = {}
+        for r in rows:
+            a = agg.setdefault(r["kind"], {"n": 0, "ups": 0, "sum_1h": 0.0, "n_1h": 0, "sum_24h": 0.0})
+            a["n"] += 1
+            a["sum_24h"] += r["ret_24h"]
+            if r["ret_24h"] >= positive_pct:
+                a["ups"] += 1
+            if r["ret_1h"] is not None:
+                a["sum_1h"] += r["ret_1h"]
+                a["n_1h"] += 1
+        out = {}
+        for kind, a in agg.items():
+            if a["n"] >= min_n:
+                out[kind] = {
+                    "n": a["n"],
+                    "up_rate": a["ups"] / a["n"],
+                    "avg_24h": a["sum_24h"] / a["n"],
+                    "avg_1h": (a["sum_1h"] / a["n_1h"]) if a["n_1h"] else None,
+                }
         return out

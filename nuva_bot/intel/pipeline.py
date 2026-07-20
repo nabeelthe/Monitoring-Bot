@@ -25,6 +25,9 @@ from .reports import ReportGenerator, PRIORITY_EMOJI
 from .plain import confidence_word
 from .risk import RiskEngine
 from .scoring import ConfidenceScorer
+from .decision import decide
+from .outcomes import OutcomeTracker, signal_kind
+from .quant import QuantEngine
 from .wallets import WalletIntel, format_wallet
 
 log = logging.getLogger("nuva.pipeline")
@@ -49,6 +52,10 @@ class IntelligencePipeline:
         self.predictor = Predictor(self.store)
         self.wallets = WalletIntel(config, self.store)
         self.reports = ReportGenerator(self.store, self.risk, self.predictor, state)
+        # quant brain
+        self.quant = QuantEngine(self.store)
+        self.outcomes = OutcomeTracker(
+            self.store, positive_pct=config.getfloat("intelligence.quant.positive_move_pct", 2.0))
 
         self.digest_interval = config.getint("alerting.digest_interval_seconds", 1800)
         self.quiet_start = config.getint("alerting.quiet_hours_utc.start", -1)
@@ -74,6 +81,7 @@ class IntelligencePipeline:
         self._tasks.append(asyncio.create_task(self._tick_loop(), name="ticks"))
         if self.wallets.enabled:
             self._tasks.append(asyncio.create_task(self._wallet_loop(), name="wallets"))
+        self._tasks.append(asyncio.create_task(self._outcome_loop(), name="outcomes"))
 
     async def stop(self):
         for t in self._tasks:
@@ -112,6 +120,8 @@ class IntelligencePipeline:
 
         self.store.add(ev)
         self.counters["events"] += 1
+        # stamp for forward-return measurement (the bot keeps score on itself)
+        self.outcomes.record(ev)
 
         if record_only:
             return ev
@@ -245,6 +255,17 @@ class IntelligencePipeline:
         if history:
             dates = ", ".join(time.strftime("%b %d", time.gmtime(e.ts)) for e in history[:3])
             lines.append(f"<b>Historical comparison:</b> similar events on {html.escape(dates)}")
+        # self-measured evidence: what price actually did after signals like this
+        evidence = self.outcomes.evidence_line(signal_kind(ev))
+        if evidence:
+            lines.append(f"📐 {html.escape(evidence)}")
+        # quant read on market-moving layers when the alert is critical
+        if ev.priority == "critical" and ev.layer in ("market", "onchain", "ethereum"):
+            snap = self.quant.snapshot()
+            if snap.ok:
+                arrow = {"trending_up": "📈", "trending_down": "📉",
+                         "ranging": "➡️", "turbulent": "🌪"}.get(snap.regime, "")
+                lines.append(f"{arrow} <b>Quant read:</b> score {snap.score:+d}, market is {snap.regime.replace('_', ' ')}")
         watch_tags = [t.split(":", 1)[1] for t in ev.tags if t.startswith("watch:")]
         if watch_tags:
             lines.append(f"⭐ <b>Watchlist match:</b> {html.escape(', '.join(watch_tags))}")
@@ -282,6 +303,26 @@ class IntelligencePipeline:
         await self.notifier.broadcast("\n".join(lines), loud=False)
         for ev in batch:
             self.store.mark_sent(ev.id)
+
+    # ---- quant brain -----------------------------------------------------------
+    def stance(self):
+        """Current market stance from the decision engine (quant + events + risk)."""
+        return decide(
+            self.quant.snapshot(),
+            self.store.recent(24, limit=300),
+            self.risk.snapshot(self.monitor_statuses),
+            self.outcomes.hit_rates(),
+        )
+
+    async def _outcome_loop(self):
+        while True:
+            await asyncio.sleep(900)
+            try:
+                written = self.outcomes.annotate()
+                if written:
+                    log.info("outcomes: measured %d forward return(s)", written)
+            except Exception:
+                log.exception("outcome annotation failed")
 
     # ---- market tape: sample collector quotes into the time-series store ------
     async def _tick_loop(self):

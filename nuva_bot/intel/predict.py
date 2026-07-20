@@ -4,7 +4,6 @@ Each prediction is a base rate plus increments per observed signal, with every
 contributing signal named — the WHY is always shown, never a black box.
 """
 
-import time
 from dataclasses import dataclass, field
 
 from .events import EventStore

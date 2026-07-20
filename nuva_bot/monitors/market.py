@@ -1,7 +1,6 @@
 """Market monitors: CoinGecko HASH price, DefiLlama TVL, Osmosis pool liquidity."""
 
 import statistics
-import time
 from datetime import datetime, timezone
 
 from ..alerts import Alert, ESCALATE

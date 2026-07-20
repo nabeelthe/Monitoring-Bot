@@ -8,7 +8,6 @@ flow, not a claim that we've identified a literal DEX swap (unless the
 counterparty is a known exchange address you've labeled in config).
 """
 
-import time
 from dataclasses import dataclass
 
 from .events import EventStore

@@ -17,6 +17,7 @@ Just type any question — “what happened today?”, “why did price move?”
 “should I worry?” (in groups, use /ask <i>question</i>)
 
 <b>📟 Terminal</b>
+/quant — should we move? stance + conviction + the evidence
 /terminal — everything on one screen (price, risk, signals, predictions)
 /chart <i>[hours]</i> — price + volume chart
 /watch <i>word</i> · /unwatch <i>word</i> — personal watchlist (matching events jump the queue)
@@ -196,6 +197,8 @@ class CommandBot:
             await self._ask(chat_id, arg)
         elif cmd == "/terminal":
             await self._terminal(chat_id)
+        elif cmd == "/quant":
+            await self._quant(chat_id)
         elif cmd == "/chart":
             await self._chart(chat_id, arg)
         elif cmd == "/watch":
@@ -282,6 +285,39 @@ class CommandBot:
     # ---- intelligence commands -------------------------------------------
     def _need_pipeline(self) -> bool:
         return self.pipeline is None
+
+    async def _quant(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        from .intel.decision import format_stance
+        p = self.pipeline
+        parts = [format_stance(p.stance())]
+        snap = p.quant.snapshot()
+        if snap.ok:
+            parts.append("")
+            parts.append("<b>Factor breakdown</b>")
+            for name, contrib, text in snap.factors:
+                sign = "🟢" if contrib > 0 else ("🔴" if contrib < 0 else "⚪")
+                parts.append(f"{sign} {contrib:+d} {html.escape(text)}")
+            rets = []
+            for label, r in (("1h", snap.ret_1h), ("6h", snap.ret_6h),
+                             ("24h", snap.ret_24h), ("7d", snap.ret_7d)):
+                if r is not None:
+                    rets.append(f"{label} {r:+.1f}%")
+            if rets:
+                parts.append("Returns: " + " · ".join(rets))
+        rates = p.outcomes.hit_rates()
+        if rates:
+            parts.append("")
+            parts.append("<b>The bot's own track record</b> (measured, not guessed)")
+            for kind, s in sorted(rates.items(), key=lambda kv: -kv[1]["n"])[:5]:
+                parts.append(f"• {html.escape(kind)}: +move followed {int(s['up_rate'] * 100)}% "
+                             f"of the time (n={s['n']}, avg 24h {s['avg_24h']:+.1f}%)")
+        else:
+            parts.append("")
+            parts.append("<i>Track record is still building — the bot measures what price does "
+                         "1h/24h after every signal and reports honest hit-rates here once it has samples.</i>")
+        await self._reply(chat_id, "\n".join(parts))
 
     async def _terminal(self, chat_id: int):
         if self._need_pipeline():

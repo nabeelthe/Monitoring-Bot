@@ -7,7 +7,6 @@
   GET /metrics       Prometheus text format
 """
 
-import json
 import logging
 import time
 

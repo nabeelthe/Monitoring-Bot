@@ -31,6 +31,18 @@ Briefs are written by the **AI analyst** (Claude, via `ANTHROPIC_API_KEY`) for
 critical/high events, with a cost guard (`max_analyses_per_hour`). Without a key the
 platform falls back to deterministic rule-based briefs — it never goes dumb silently.
 
+## The Quant Brain (v3.0)
+
+| Engine | What it does |
+|---|---|
+| **Quant signals** | Momentum (1h/6h/24h/7d), RSI, EMA trend, price/volume z-scores, volatility regime (trending/ranging/turbulent) → a −100…+100 Quant Score with a per-factor plain-language breakdown |
+| **Outcome tracker** | Measures what price actually did 1h/24h after every signal the bot fired → honest per-signal hit-rate tables with sample sizes ("mint events preceded a +2% day 8/11 times") |
+| **Decision engine** | Blends quant score + 24h news flow + risk panel + track record into one stance: BULLISH/BEARISH/NEUTRAL with conviction (low/med/high) and the top reasons — `/quant` |
+
+The bot keeps score on itself: predictions cite measured history, conviction is
+capped until the track record grows, and every stance ends with
+"data read, not financial advice."
+
 ## Intelligence engines
 
 | Engine | What it does |

@@ -74,6 +74,18 @@ def build_terminal(pipeline, monitor_statuses: dict | None = None) -> str:
         lines.append("<i>Market tape warming up — first ticks arrive within ~10 minutes of startup.</i>")
     lines.append("")
 
+    # ---- quant stance -------------------------------------------------------
+    try:
+        from .decision import decide
+        st = decide(p.quant.snapshot(), p.store.recent(24, limit=300),
+                    p.risk.snapshot(monitor_statuses or p.monitor_statuses),
+                    p.outcomes.hit_rates())
+        icon = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}[st.stance]
+        lines.append(f"<b>QUANT</b>  {icon} {st.stance.upper()} · conviction {st.conviction} · {st.score:+d} — /quant for why")
+        lines.append("")
+    except Exception:  # never let the stance break the whole terminal screen
+        pass
+
     # ---- risk strip ---------------------------------------------------------
     dims = p.risk.snapshot(monitor_statuses or p.monitor_statuses)
     arrows = {"rising": "↑", "falling": "↓", "flat": "→"}

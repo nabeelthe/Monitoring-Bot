@@ -67,6 +67,24 @@ class Copilot:
         if by_layer:
             lines.append("\nSignal counts 24h: " + ", ".join(f"{k}={v}" for k, v in sorted(by_layer.items())))
 
+        try:
+            snap = p.quant.snapshot()
+            if snap.ok:
+                lines.append(f"\nQuant signals: score {snap.score:+d}, regime {snap.regime}, "
+                             f"RSI {snap.rsi:.0f}" if snap.rsi is not None else
+                             f"\nQuant signals: score {snap.score:+d}, regime {snap.regime}")
+                for name, contrib, text in snap.factors[:5]:
+                    lines.append(f"- {name} ({contrib:+d}): {text}")
+            st = p.stance()
+            lines.append(f"Current stance: {st.stance} (conviction {st.conviction}, score {st.score:+d})")
+            rates = p.outcomes.hit_rates()
+            if rates:
+                lines.append("Self-measured hit rates (what price did 24h after past signals):")
+                for kind, s in list(rates.items())[:5]:
+                    lines.append(f"- {kind}: up-rate {int(s['up_rate'] * 100)}% over n={s['n']}")
+        except Exception:
+            pass  # quant context is additive; never break the copilot
+
         lines.append("\nRisk panel:")
         for d in p.risk.snapshot(p.monitor_statuses):
             lines.append(f"- {d.name}: {d.score}/100 ({d.trend}) — {d.detail}")

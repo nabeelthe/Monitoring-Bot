@@ -53,6 +53,8 @@ intelligence:
     enabled: true
     min_events: 5                 # need at least this many events in the hour
     multiplier: 4                 # ...and ≥4× the layer's normal hourly rate
+  quant:                          # quant brain: indicators, outcomes, decision engine
+    positive_move_pct: 2.0        # a 24h move ≥ this % counts as a "hit" in the track record
   wallets:                        # Wallet Intelligence — flags daily buy+sell (churn) wallets
     enabled: true
     window_days: 7                # look back this many days for the pattern
