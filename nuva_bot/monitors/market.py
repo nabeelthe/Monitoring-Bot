@@ -29,14 +29,26 @@ class CoinGeckoHashMonitor(Monitor):
 
     async def fetch_quote(self, ctx: Context) -> dict | None:
         headers = {"x-cg-demo-api-key": self.api_key} if self.api_key else None
+        # BTC/ETH ride along in the same request (one API call) so the
+        # intelligence layer can judge HASH moves against the broad market.
         status, data = await self.fetch(
             ctx, f"{self.base}/coins/markets",
-            params={"vs_currency": "usd", "ids": self.coin_id},
+            params={"vs_currency": "usd", "ids": f"{self.coin_id},bitcoin,ethereum"},
             headers=headers,
         )
         if not isinstance(data, list) or not data:
             raise RuntimeError(f"coingecko returned HTTP {status} / empty for {self.coin_id}")
-        return data[0]
+        quote = None
+        for entry in data:
+            cid = entry.get("id")
+            if cid == self.coin_id:
+                quote = entry
+            elif cid in ("bitcoin", "ethereum"):
+                key = "cg:btc_24h" if cid == "bitcoin" else "cg:eth_24h"
+                ctx.state.kv_set(key, entry.get("price_change_percentage_24h"))
+        if quote is None:
+            raise RuntimeError(f"coingecko response missing {self.coin_id}")
+        return quote
 
     async def poll(self, ctx: Context) -> list:
         q = await self.fetch_quote(ctx)
@@ -93,6 +105,7 @@ class CoinGeckoHashMonitor(Monitor):
 
         ctx.state.kv_set("cg:last_price", price)
         ctx.state.kv_set("cg:last_volume", volume)
+        ctx.state.kv_set("cg:hash_24h", change)
         ctx.state.kv_set("cg:last_quote_ts", datetime.now(timezone.utc).timestamp())
         return alerts
 

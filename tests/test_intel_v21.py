@@ -2,13 +2,11 @@
 language, media expansion, repost detection, per-source alert budget."""
 
 import asyncio
-import time
 
 import pytest
 
 from nuva_bot.alerts import Alert
 from nuva_bot.config import Config
-from nuva_bot.intel.events import Event
 from nuva_bot.intel.pipeline import IntelligencePipeline
 from nuva_bot.intel.plain import humanize
 from nuva_bot.monitors.base import Context

@@ -82,9 +82,18 @@ def build_terminal(pipeline, monitor_statuses: dict | None = None) -> str:
                     p.outcomes.hit_rates())
         icon = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}[st.stance]
         lines.append(f"<b>QUANT</b>  {icon} {st.stance.upper()} · conviction {st.conviction} · {st.score:+d} — /quant for why")
-        lines.append("")
     except Exception:  # never let the stance break the whole terminal screen
         pass
+    try:
+        from . import context as market_context, psychology
+        mctx = market_context.read(p.state)
+        if mctx.ok:
+            lines.append(f"<b>MACRO</b>  HASH {mctx.hash_24h:+.1f}% vs mkt {mctx.relative:+.1f}pt")
+        psych = psychology.read(p.quant.snapshot(), p.store)
+        lines.append(f"<b>CROWD</b>  {psych.emoji} {psych.state}")
+    except Exception:
+        pass
+    lines.append("")
 
     # ---- risk strip ---------------------------------------------------------
     dims = p.risk.snapshot(monitor_statuses or p.monitor_statuses)
@@ -126,7 +135,7 @@ def build_terminal(pipeline, monitor_statuses: dict | None = None) -> str:
         lines.append(f"<b>WATCH</b>  {', '.join(watch)} — {hits} hit(s) 24h")
 
     lines.append("")
-    lines.append("<i>/chart /risk /predict /intelligence /report — /help for all</i>")
+    lines.append("<i>/brief for the full research read · /chart /risk /predict /intelligence — /help for all</i>")
     return "\n".join(lines)
 
 

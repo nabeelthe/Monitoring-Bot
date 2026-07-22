@@ -17,6 +17,7 @@ Just type any question — “what happened today?”, “why did price move?”
 “should I worry?” (in groups, use /ask <i>question</i>)
 
 <b>📟 Terminal</b>
+/brief — full research brief (exec summary → decision matrix)
 /quant — should we move? stance + conviction + the evidence
 /terminal — everything on one screen (price, risk, signals, predictions)
 /chart <i>[hours]</i> — price + volume chart
@@ -25,12 +26,15 @@ Just type any question — “what happened today?”, “why did price move?”
 
 <b>Intelligence</b>
 /intelligence — top signals + stories right now
+/entity <i>wallet|exchange|name</i> — knowledge-graph profile
+/narratives — which narratives the project is entering/leaving
 /risk — 7-dimension risk panel
 /predict — probability estimates with evidence
 /report <i>[morning|daily|weekly]</i> — executive brief
 /history <i>[hours]</i> — recent event memory
 /search <i>text</i> — query the full event history
 /digest — flush pending medium-priority digest now
+/mode <i>retail|analyst|institutional</i> — your analysis depth
 
 <b>Market & ops</b>
 /status — health of every collector
@@ -197,6 +201,14 @@ class CommandBot:
             await self._ask(chat_id, arg)
         elif cmd == "/terminal":
             await self._terminal(chat_id)
+        elif cmd == "/brief":
+            await self._brief(chat_id, arg)
+        elif cmd == "/mode":
+            await self._mode(chat_id, arg)
+        elif cmd == "/entity":
+            await self._entity(chat_id, arg)
+        elif cmd == "/narratives":
+            await self._narratives(chat_id)
         elif cmd == "/quant":
             await self._quant(chat_id)
         elif cmd == "/chart":
@@ -306,6 +318,11 @@ class CommandBot:
                     rets.append(f"{label} {r:+.1f}%")
             if rets:
                 parts.append("Returns: " + " · ".join(rets))
+        from .intel import context as market_context
+        mline = market_context.line(market_context.read(p.state))
+        if mline:
+            parts.append("")
+            parts.append(f"🌐 {html.escape(mline)}")
         rates = p.outcomes.hit_rates()
         if rates:
             parts.append("")
@@ -313,10 +330,13 @@ class CommandBot:
             for kind, s in sorted(rates.items(), key=lambda kv: -kv[1]["n"])[:5]:
                 parts.append(f"• {html.escape(kind)}: +move followed {int(s['up_rate'] * 100)}% "
                              f"of the time (n={s['n']}, avg 24h {s['avg_24h']:+.1f}%)")
+            acc = p.outcomes.accuracy_line()
+            if acc:
+                parts.append(f"📐 {html.escape(acc)}")
         else:
             parts.append("")
             parts.append("<i>Track record is still building — the bot measures what price does "
-                         "1h/24h after every signal and reports honest hit-rates here once it has samples.</i>")
+                         "1h/24h/7d after every signal and reports honest hit-rates here once it has samples.</i>")
         await self._reply(chat_id, "\n".join(parts))
 
     async def _terminal(self, chat_id: int):
@@ -324,6 +344,56 @@ class CommandBot:
             return await self._reply(chat_id, "Intelligence layer disabled.")
         from .intel.terminal import build_terminal
         await self._reply(chat_id, build_terminal(self.pipeline, self.scheduler.statuses))
+
+    # ---- v4.0: research brief, modes, knowledge graph, narratives ----------
+    def _chat_mode(self, chat_id: int) -> str:
+        return str(self.state.kv_get(f"mode:{chat_id}", "analyst"))
+
+    async def _brief(self, chat_id: int, arg: str):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        from .intel.brief import MODES
+        mode = arg.strip().lower() or self._chat_mode(chat_id)
+        if mode not in MODES:
+            mode = self._chat_mode(chat_id)
+        try:  # a brief takes a moment to assemble — show typing
+            await self.client.api("sendChatAction", chat_id=chat_id, action="typing", http_timeout=10)
+        except TelegramError:
+            pass
+        await self._reply(chat_id, self.pipeline.research(mode))
+
+    async def _mode(self, chat_id: int, arg: str):
+        from .intel.brief import MODES
+        mode = arg.strip().lower()
+        if mode not in MODES:
+            current = self._chat_mode(chat_id)
+            return await self._reply(
+                chat_id,
+                f"Your analysis depth: <b>{current}</b>\n\n"
+                "• <b>retail</b> — plain language, just the takeaway\n"
+                "• <b>analyst</b> — the full reasoned view (default)\n"
+                "• <b>institutional</b> — maximum depth incl. the Decision Matrix\n\n"
+                "Set it with /mode <i>retail|analyst|institutional</i>. "
+                "It shapes /brief and future on-demand analysis for this chat.")
+        self.state.kv_set(f"mode:{chat_id}", mode)
+        self.state.save()
+        await self._reply(chat_id, f"✅ Analysis depth set to <b>{mode}</b> for this chat. Try /brief.")
+
+    async def _entity(self, chat_id: int, arg: str):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        if not arg.strip():
+            return await self._reply(
+                chat_id,
+                "Usage: /entity <i>wallet address, exchange, @handle, or name</i>\n"
+                f"🕸 Graph so far: {html.escape(self.pipeline.graph.summary_line())}")
+        await self._reply(chat_id, self.pipeline.graph.profile(arg))
+
+    async def _narratives(self, chat_id: int):
+        if self._need_pipeline():
+            return await self._reply(chat_id, "Intelligence layer disabled.")
+        from .intel.narrative import detect, format_panel
+        await self._reply(chat_id, format_panel(detect(self.pipeline.store)))
 
     async def _chart(self, chat_id: int, arg: str):
         if self._need_pipeline():

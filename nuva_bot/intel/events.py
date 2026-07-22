@@ -76,7 +76,24 @@ class EventStore:
                 done_1h INTEGER DEFAULT 0, done_24h INTEGER DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_outcomes_kind ON outcomes(kind);
+            CREATE TABLE IF NOT EXISTS graph_nodes(
+                id TEXT PRIMARY KEY, kind TEXT, label TEXT,
+                first_ts REAL, last_ts REAL, mentions INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS graph_edges(
+                src TEXT NOT NULL, dst TEXT NOT NULL,
+                weight REAL DEFAULT 0, last_ts REAL,
+                PRIMARY KEY(src, dst)
+            );
+            CREATE INDEX IF NOT EXISTS idx_edges_src ON graph_edges(src);
         """)
+        # v4.0 migration: extend self-evaluation to a 7-day horizon.
+        for ddl in ("ALTER TABLE outcomes ADD COLUMN ret_7d REAL",
+                    "ALTER TABLE outcomes ADD COLUMN done_7d INTEGER DEFAULT 0"):
+            try:
+                self._db.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         self._db.commit()
 
     def close(self):
@@ -262,10 +279,13 @@ class EventStore:
             )
             self._db.commit()
 
+    _HORIZON_COLS = {"1h": ("ret_1h", "done_1h"), "24h": ("ret_24h", "done_24h"),
+                     "7d": ("ret_7d", "done_7d")}
+
     def outcomes_pending(self, horizon: str, before_ts: float, limit: int = 200) -> list[tuple[str, float]]:
-        """(event_id, ts) rows whose `horizon` ('1h'|'24h') is not yet annotated
-        and whose measurement time has passed."""
-        col = "done_1h" if horizon == "1h" else "done_24h"
+        """(event_id, ts) rows whose `horizon` ('1h'|'24h'|'7d') is not yet
+        annotated and whose measurement time has passed."""
+        col = self._HORIZON_COLS[horizon][1]
         with self._lock:
             rows = self._db.execute(
                 f"SELECT event_id, ts FROM outcomes WHERE {col}=0 AND ts <= ? LIMIT ?",
@@ -275,14 +295,85 @@ class EventStore:
 
     def outcome_set(self, event_id: str, horizon: str, ret: float | None):
         """Mark a horizon measured; ret may be None (no price data ⇒ excluded from stats)."""
-        col_ret = "ret_1h" if horizon == "1h" else "ret_24h"
-        col_done = "done_1h" if horizon == "1h" else "done_24h"
+        col_ret, col_done = self._HORIZON_COLS[horizon]
         with self._lock:
             self._db.execute(
                 f"UPDATE outcomes SET {col_ret}=?, {col_done}=1 WHERE event_id=?",
                 (ret, event_id),
             )
             self._db.commit()
+
+    # ---- knowledge graph (entities + co-occurrence relationships) -----------
+    def graph_touch_node(self, node_id: str, kind: str, label: str, ts: float):
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO graph_nodes(id, kind, label, first_ts, last_ts, mentions) "
+                "VALUES (?,?,?,?,?,1) "
+                "ON CONFLICT(id) DO UPDATE SET last_ts=excluded.last_ts, "
+                "mentions=mentions+1, label=excluded.label",
+                (node_id, kind, label, ts, ts),
+            )
+            self._db.commit()
+
+    def graph_bump_edge(self, src: str, dst: str, ts: float, weight: float = 1.0):
+        if src == dst:
+            return
+        a, b = sorted((src, dst))  # undirected: store one canonical direction
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO graph_edges(src, dst, weight, last_ts) VALUES (?,?,?,?) "
+                "ON CONFLICT(src, dst) DO UPDATE SET weight=weight+excluded.weight, "
+                "last_ts=excluded.last_ts",
+                (a, b, weight, ts),
+            )
+            self._db.commit()
+
+    def graph_node(self, node_id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM graph_nodes WHERE id=?", (node_id,)).fetchone()
+        return dict(row) if row else None
+
+    def graph_search_nodes(self, text: str, limit: int = 5) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM graph_nodes WHERE id LIKE ? OR label LIKE ? "
+                "ORDER BY mentions DESC LIMIT ?",
+                (f"%{text.lower()}%", f"%{text}%", limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def graph_neighbors(self, node_id: str, limit: int = 8) -> list[tuple[dict, float]]:
+        """Strongest-connected nodes: [(node_row, edge_weight), ...]."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT n.*, e.weight w FROM graph_edges e "
+                "JOIN graph_nodes n ON n.id = CASE WHEN e.src=? THEN e.dst ELSE e.src END "
+                "WHERE e.src=? OR e.dst=? ORDER BY e.weight DESC LIMIT ?",
+                (node_id, node_id, node_id, limit),
+            ).fetchall()
+        return [({k: r[k] for k in r.keys() if k != "w"}, r["w"]) for r in rows]
+
+    def graph_counts(self) -> tuple[int, int]:
+        with self._lock:
+            n = self._db.execute("SELECT COUNT(*) c FROM graph_nodes").fetchone()["c"]
+            e = self._db.execute("SELECT COUNT(*) c FROM graph_edges").fetchone()["c"]
+        return n, e
+
+    def wallet_stats(self, wallet: str) -> dict | None:
+        """Lifetime (30d-window) behavior stats for one wallet across chains."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) n, MIN(ts) first_ts, MAX(ts) last_ts, "
+                "SUM(CASE WHEN direction='in' THEN amount ELSE 0 END) total_in, "
+                "SUM(CASE WHEN direction='out' THEN amount ELSE 0 END) total_out, "
+                "COUNT(DISTINCT DATE(ts, 'unixepoch')) days_active, "
+                "MAX(chain) chain, MAX(denom) denom "
+                "FROM wallet_flows WHERE wallet=?", (wallet.lower(),),
+            ).fetchone()
+        if not row or not row["n"]:
+            return None
+        return dict(row)
 
     def hit_rates(self, min_n: int = 3, positive_pct: float = 2.0) -> dict:
         """Per signal kind: how often a measured +move followed, and average returns.

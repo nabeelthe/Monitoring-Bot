@@ -252,7 +252,7 @@ def test_pipeline_record_only_stores_without_sending(tmp_path):
     pipe, notifier = _pipeline(tmp_path)
     alert = Alert(monitor="Provenance Governance", layer="onchain",
                   title="New governance proposal #1: mainnet upgrade", priority="always")
-    ev = run(pipe.process(alert, ["mainnet"], record_only=True))
+    run(pipe.process(alert, ["mainnet"], record_only=True))
     assert notifier.sent == []
     assert pipe.store.total() == 1
     pipe.store.close()

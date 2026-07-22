@@ -17,12 +17,16 @@ import time
 from datetime import datetime, timezone
 
 from ..alerts import Alert
+from . import context as market_context
+from .analogs import AnalogEngine
 from .analyst import Analyst, Brief
 from .correlator import Correlator
 from .events import Event, EventStore
+from .graph import KnowledgeGraph
 from .predict import Predictor
 from .reports import ReportGenerator, PRIORITY_EMOJI
 from .plain import confidence_word
+from .probability import assess
 from .risk import RiskEngine
 from .scoring import ConfidenceScorer
 from .decision import decide
@@ -56,6 +60,9 @@ class IntelligencePipeline:
         self.quant = QuantEngine(self.store)
         self.outcomes = OutcomeTracker(
             self.store, positive_pct=config.getfloat("intelligence.quant.positive_move_pct", 2.0))
+        # v4.0 intelligence terminal: analogs, knowledge graph
+        self.analogs = AnalogEngine(self.store)
+        self.graph = KnowledgeGraph(self.store)
 
         self.digest_interval = config.getint("alerting.digest_interval_seconds", 1800)
         self.quiet_start = config.getint("alerting.quiet_hours_utc.start", -1)
@@ -122,6 +129,11 @@ class IntelligencePipeline:
         self.counters["events"] += 1
         # stamp for forward-return measurement (the bot keeps score on itself)
         self.outcomes.record(ev)
+        # mine entities into the knowledge graph (never let it break the pipeline)
+        try:
+            self.graph.observe(ev)
+        except Exception:
+            log.exception("graph observe failed")
 
         if record_only:
             return ev
@@ -251,21 +263,40 @@ class IntelligencePipeline:
         lines.append(f"<b>Suggested action:</b> {html.escape(brief.suggested_action[:300])}")
         if brief.monitor_next:
             lines.append("<b>Monitor next:</b> " + html.escape(", ".join(brief.monitor_next[:3])))
-        history = context.get("history") or []
-        if history:
-            dates = ", ".join(time.strftime("%b %d", time.gmtime(e.ts)) for e in history[:3])
-            lines.append(f"<b>Historical comparison:</b> similar events on {html.escape(dates)}")
+        # historical analogs: pattern-matched past situations with MEASURED outcomes
+        try:
+            report = self.analogs.for_event(ev)
+        except Exception:
+            report = None
+            log.exception("analog lookup failed")
+        if report is not None and report.ok:
+            lines.append(f"📚 <b>Historical similarity:</b> {html.escape(report.line())}")
+        else:
+            history = context.get("history") or []
+            if history:
+                dates = ", ".join(time.strftime("%b %d", time.gmtime(e.ts)) for e in history[:3])
+                lines.append(f"<b>Historical comparison:</b> similar events on {html.escape(dates)}")
         # self-measured evidence: what price actually did after signals like this
         evidence = self.outcomes.evidence_line(signal_kind(ev))
         if evidence:
             lines.append(f"📐 {html.escape(evidence)}")
-        # quant read on market-moving layers when the alert is critical
+        # broad-market context: is this HASH-specific or just the market moving?
+        if ev.layer in ("market", "onchain", "ethereum"):
+            mline = market_context.line(market_context.read(self.state))
+            if mline:
+                lines.append(f"🌐 {html.escape(mline)}")
+        # quant read + probability split when the alert is critical
         if ev.priority == "critical" and ev.layer in ("market", "onchain", "ethereum"):
             snap = self.quant.snapshot()
             if snap.ok:
                 arrow = {"trending_up": "📈", "trending_down": "📉",
                          "ranging": "➡️", "turbulent": "🌪"}.get(snap.regime, "")
                 lines.append(f"{arrow} <b>Quant read:</b> score {snap.score:+d}, market is {snap.regime.replace('_', ' ')}")
+            try:
+                prob = self.probability()
+                lines.append(f"🎲 {html.escape(prob.line())}")
+            except Exception:
+                log.exception("probability compute failed")
         watch_tags = [t.split(":", 1)[1] for t in ev.tags if t.startswith("watch:")]
         if watch_tags:
             lines.append(f"⭐ <b>Watchlist match:</b> {html.escape(', '.join(watch_tags))}")
@@ -314,6 +345,18 @@ class IntelligencePipeline:
             self.outcomes.hit_rates(),
         )
 
+    def probability(self):
+        """Bull/neutral/bear probability split for the live situation."""
+        risk_dims = self.risk.snapshot(self.monitor_statuses)
+        risk_hot = any(d.name in ("security", "liquidity") and d.score >= 60 for d in risk_dims)
+        return assess(self.stance().score, self.quant.snapshot(), self.analogs.current(),
+                      self.outcomes.hit_rates(), risk_hot=risk_hot)
+
+    def research(self, mode: str = "analyst") -> str:
+        """The /brief research report at the requested depth."""
+        from .brief import build_research  # noqa: PLC0415 (lazy: brief pulls several layers)
+        return build_research(self, mode)
+
     async def _outcome_loop(self):
         while True:
             await asyncio.sleep(900)
@@ -357,6 +400,11 @@ class IntelligencePipeline:
                 if time.time() - last < 24 * 3600:  # re-flag a given wallet at most once/day
                     continue
                 self.state.kv_set(key, time.time())
+                # flagged traders enter the knowledge graph as wallet entities
+                try:
+                    self.graph.observe_flow(chain, w.wallet, "in", time.time())
+                except Exception:
+                    log.exception("graph flow observe failed")
                 price_hint = price if chain == "provenance" else None  # no NUVA market price pre-TGE
                 await self._send_wallet_alert(chain, w, price_hint)
         self.state.save()

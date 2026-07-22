@@ -3,7 +3,6 @@
 import asyncio
 import time
 
-from nuva_bot.alerts import Alert
 from nuva_bot.config import Config
 from nuva_bot.intel.copilot import Copilot
 from nuva_bot.intel.events import Event
