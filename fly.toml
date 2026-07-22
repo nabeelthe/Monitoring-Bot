@@ -1,0 +1,32 @@
+# Fly.io deployment for the Nuva Intelligence Platform.
+# Full walkthrough: deploy/DEPLOY_FLY.md
+#
+#   fly apps create <your-unique-name>     # then set `app` below to match
+#   fly volumes create nuva_data -r fra -s 1 -a <your-unique-name>
+#   fly secrets set TELEGRAM_BOT_TOKEN=... (see guide) -a <your-unique-name>
+#   fly deploy --remote-only -a <your-unique-name>
+
+app = "nuva-intel-bot"        # must be globally unique — change if taken
+primary_region = "fra"         # Frankfurt; any region reaches Telegram fine
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Persistent disk for the event memory, quant tape and dedupe state.
+# Must be created in the same region: `fly volumes create nuva_data -r fra -s 1`
+[[mounts]]
+  source = "nuva_data"
+  destination = "/app/data"
+
+# Exposes the dashboard + /healthz + /metrics at https://<app>.fly.dev.
+# Delete this whole block to keep the bot private (Telegram still works).
+[http_service]
+  internal_port = 8088
+  force_https = true
+  auto_stop_machines = "off"   # a monitoring bot must NEVER scale to zero
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"             # bump to "512mb" if you see out-of-memory restarts
